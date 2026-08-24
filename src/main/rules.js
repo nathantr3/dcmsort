@@ -119,6 +119,7 @@ function defaultAttributes() {
 
         descriptionMode: "affix", // or "replace"
         descriptionNew: null,
+        descriptionStripPrefix: null,
         descriptionPrefix: null,
         descriptionSuffix: null,
         stripExistingPrefix: false,
@@ -231,14 +232,27 @@ function stripPrefix(text, prefix) {
 }
 
 /**
- * Build the output Series Description.
- *   replace mode: descriptionNew stands in for the original entirely
- *   affix mode:   prefix + original + suffix
- * Either way the prefix and suffix wrap the result.
+ * Build the output Series Description, in this order:
+ *   1. strip descriptionStripPrefix from the original, if set
+ *   2. strip descriptionPrefix too, if stripExistingPrefix is on
+ *   3. replace mode: descriptionNew stands in for what is left entirely
+ *      affix mode:   descriptionNew becomes a "label: " ahead of it
+ *   4. wrap in descriptionPrefix and descriptionSuffix
+ *
+ * Steps 1 and 4 are independent, so "strip NOT DIAGNOSTIC:, add My Feature:"
+ * is a single rule.
  */
 function computeDescription(attributes, originalDescription) {
     let body = originalDescription || "";
 
+    // Removing an unwanted prefix and adding a new one are separate intents:
+    // "drop NOT DIAGNOSTIC:, then add My Feature:". descriptionStripPrefix is
+    // whatever should come off, independent of what goes on.
+    if (attributes.descriptionStripPrefix) {
+        body = stripPrefix(body, attributes.descriptionStripPrefix);
+    }
+    // stripExistingPrefix is the narrower case of removing the prefix we are
+    // about to add, so re-exporting a folder does not stack it up.
     if (attributes.stripExistingPrefix && attributes.descriptionPrefix) {
         body = stripPrefix(body, attributes.descriptionPrefix);
     }

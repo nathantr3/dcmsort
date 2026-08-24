@@ -106,9 +106,18 @@ The slices and phases fields accept:
 offset 1 turn series 4 into series 401 — or can be set absolutely.
 
 **Series description** either keeps the original (optionally with a label, prefix, and suffix) or
-replaces it. *Strip this prefix if already present* uses dcmsplit's case-insensitive prefix regex, so
-exporting a folder twice does not stack `NOT DIAGNOSTIC: NOT DIAGNOSTIC:`. Output is truncated to the
-64-character `LO` limit.
+replaces it. It is built in this order:
+
+1. **Strip prefix** comes off the front of the original. This is independent of what gets added, so
+   "drop `NOT DIAGNOSTIC:` and add `My Feature:`" is one rule. Matching is case-insensitive and takes
+   a trailing colon with it, using dcmsplit's prefix regex.
+2. **Also strip the prefix being added** additionally removes the prefix from step 4, so exporting a
+   folder twice does not stack `My Feature: My Feature:`.
+3. **Label** is placed ahead of what is left as `Label: original`, or in replace mode stands in for
+   it entirely.
+4. **Prefix** and **suffix** wrap the result.
+
+Output is truncated to the 64-character `LO` limit.
 
 **Identity.** Each child series gets a freshly generated `SeriesInstanceUID` (a real `2.25.` UID, not
 dcmsplit's increment of the last component, which can collide with neighbouring series).

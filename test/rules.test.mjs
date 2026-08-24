@@ -124,6 +124,59 @@ describe("attribute formulas", () => {
         expect(computeDescription(attrs, "NOT DIAGNOSTIC: T1 VIBE")).toBe("NOT DIAGNOSTIC: T1 VIBE");
     });
 
+    it("strips one prefix and adds a different one", () => {
+        const attrs = {
+            ...defaultAttributes(),
+            descriptionStripPrefix: "NOT DIAGNOSTIC:",
+            descriptionPrefix: "My Feature:"
+        };
+        expect(computeDescription(attrs, "NOT DIAGNOSTIC: T1 VIBE")).toBe("My Feature: T1 VIBE");
+        // Nothing to strip is not an error; the prefix is still added.
+        expect(computeDescription(attrs, "T1 VIBE")).toBe("My Feature: T1 VIBE");
+    });
+
+    it("strips a prefix without adding one", () => {
+        const attrs = { ...defaultAttributes(), descriptionStripPrefix: "NOT DIAGNOSTIC:" };
+        expect(computeDescription(attrs, "NOT DIAGNOSTIC: T1 VIBE")).toBe("T1 VIBE");
+    });
+
+    it("matches the stripped prefix case-insensitively and eats a trailing colon", () => {
+        const attrs = { ...defaultAttributes(), descriptionStripPrefix: "not diagnostic" };
+        expect(computeDescription(attrs, "NOT DIAGNOSTIC: T1 VIBE")).toBe("T1 VIBE");
+    });
+
+    it("applies the stripped prefix and the added prefix independently", () => {
+        // Both mechanisms at once: drop the old marker, add a new one, and do
+        // not let the new one stack on a re-export.
+        const attrs = {
+            ...defaultAttributes(),
+            descriptionStripPrefix: "NOT DIAGNOSTIC:",
+            descriptionPrefix: "My Feature:",
+            stripExistingPrefix: true
+        };
+        expect(computeDescription(attrs, "NOT DIAGNOSTIC: My Feature: T1 VIBE")).toBe("My Feature: T1 VIBE");
+    });
+
+    it("strips before applying a label in affix mode", () => {
+        const attrs = {
+            ...defaultAttributes(),
+            descriptionStripPrefix: "NOT DIAGNOSTIC:",
+            descriptionNew: "Early",
+            descriptionPrefix: "My Feature:"
+        };
+        expect(computeDescription(attrs, "NOT DIAGNOSTIC: T1 VIBE")).toBe("My Feature: Early: T1 VIBE");
+    });
+
+    it("leaves the stripped prefix irrelevant in replace mode", () => {
+        const attrs = {
+            ...defaultAttributes(),
+            descriptionMode: "replace",
+            descriptionStripPrefix: "NOT DIAGNOSTIC:",
+            descriptionNew: "PDFF"
+        };
+        expect(computeDescription(attrs, "NOT DIAGNOSTIC: T1 VIBE")).toBe("PDFF");
+    });
+
     it("truncates to the 64-character LO limit", () => {
         const attrs = { ...defaultAttributes(), descriptionMode: "replace", descriptionNew: "X".repeat(100) };
         expect(computeDescription(attrs, "").length).toBe(64);
@@ -295,5 +348,23 @@ describe("rule set portability", () => {
         expect(normalized.childSeries[0]).toMatchObject({ id: "cs-1", color: "#4EC9B0" });
         expect(normalized.childSeries[0].selections[0]).toEqual({ volumeId: "v1", slices: "*", phases: "*" });
         expect(normalized.childSeries[0].attributes.seriesScale).toBe(100);
+    });
+
+    it("loads a rule file written before descriptionStripPrefix existed", () => {
+        const old = {
+            version: 1,
+            childSeries: [
+                {
+                    id: "cs-1",
+                    label: "A",
+                    selections: [{ volumeId: "v1", slices: "*", phases: "1-3" }],
+                    attributes: { descriptionPrefix: "NOT DIAGNOSTIC:", stripExistingPrefix: true }
+                }
+            ]
+        };
+        const attrs = normalizeRuleSet(old).childSeries[0].attributes;
+        expect(attrs.descriptionStripPrefix).toBeNull();
+        // The old behaviour is unchanged by the new field being absent.
+        expect(computeDescription(attrs, "NOT DIAGNOSTIC: T1 VIBE")).toBe("NOT DIAGNOSTIC: T1 VIBE");
     });
 });

@@ -104,13 +104,22 @@ function descriptionGroup(attrs, resolved, set) {
                     : "Written as 'Label: original description'"
             )
         ),
-        row("Prefix", textInput(attrs.descriptionPrefix, (v) => set({ descriptionPrefix: v }), "e.g. NOT DIAGNOSTIC:")),
+        row(
+            "Strip prefix",
+            textInput(
+                attrs.descriptionStripPrefix,
+                (v) => set({ descriptionStripPrefix: v }),
+                "e.g. NOT DIAGNOSTIC:",
+                "Removed from the start of the original description before anything is added. Case-insensitive, and takes a trailing colon with it."
+            )
+        ),
+        row("Prefix", textInput(attrs.descriptionPrefix, (v) => set({ descriptionPrefix: v }), "e.g. My Feature:")),
         row("Suffix", textInput(attrs.descriptionSuffix, (v) => set({ descriptionSuffix: v }), "e.g. (phases 1-3)")),
         checkbox(
-            "Strip this prefix if already present",
+            "Also strip the prefix being added",
             Boolean(attrs.stripExistingPrefix),
             (v) => set({ stripExistingPrefix: v }),
-            "Stops the prefix stacking up when a folder is exported more than once"
+            "Stops the prefix above stacking up when a folder is exported more than once"
         ),
         el("div", { class: "muted small", text: `from "${resolved?.baseSeriesDescription ?? ""}"` }),
         preview(resolved?.seriesDescription || "(empty)")
