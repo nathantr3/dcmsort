@@ -1,0 +1,310 @@
+/* Volume cards, the rule builder, and the attribute editor. */
+
+.volume-panel {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px;
+    overflow-y: auto;
+    max-height: 42vh;
+}
+
+.volume-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    background: var(--bg-raised);
+    min-width: 230px;
+}
+
+.volume-card h3 {
+    margin: 0 0 2px;
+    font-size: 13px;
+    color: var(--text-bright);
+}
+
+.volume-shape {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ok);
+    margin-bottom: 6px;
+}
+
+.volume-source {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+}
+
+.volume-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.tag {
+    font-size: 10px;
+    font-family: var(--mono);
+    background: var(--bg-input);
+    border-radius: 3px;
+    padding: 1px 5px;
+    color: var(--text-dim);
+}
+
+.volume-keys {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+.volume-keys select {
+    font-size: 11px;
+    padding: 2px 4px;
+}
+
+.volume-keys.low-confidence {
+    color: var(--warn);
+}
+
+/*
+ * A miniature slices-by-phases map. Cells light up in a child series' colour
+ * as rules claim them, so the shape of a selection is visible at a glance.
+ */
+.volume-grid {
+    display: grid;
+    gap: 1px;
+    margin: 8px 0;
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+.grid-cell {
+    width: 7px;
+    height: 7px;
+    border-radius: 1px;
+    background: var(--bg-input);
+}
+
+.grid-cell.claimed {
+    background: var(--claim-color, var(--ok));
+}
+
+.grid-cell.multi {
+    outline: 1px solid var(--text-bright);
+    outline-offset: -1px;
+}
+
+.grid-axis {
+    font-size: 10px;
+    color: var(--text-dim);
+}
+
+/* ---------------------------------------------------------------- */
+/* Rule editor                                                       */
+/* ---------------------------------------------------------------- */
+
+.rule-editor {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.child-card {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--child-color, var(--border));
+    border-radius: var(--radius);
+    background: var(--bg-raised);
+}
+
+.child-card.focused {
+    border-color: var(--border-strong);
+    border-left-color: var(--child-color, var(--border));
+    background: #2b2b2d;
+}
+
+.child-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    cursor: pointer;
+}
+
+.child-swatch {
+    flex: none;
+    width: 11px;
+    height: 11px;
+    border-radius: 3px;
+    background: var(--child-color);
+}
+
+.child-label-input {
+    background: transparent;
+    border: 1px solid transparent;
+    font-weight: 600;
+    color: var(--text-bright);
+    padding: 2px 4px;
+    width: 16ch;
+    flex: none;
+}
+
+.child-label-input:hover,
+.child-label-input:focus {
+    border-color: var(--border);
+    background: var(--bg-input);
+}
+
+.child-preview {
+    font-size: 11px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.child-preview strong {
+    color: var(--ok);
+    font-family: var(--mono);
+    font-weight: 500;
+}
+
+.child-body {
+    padding: 0 10px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/*
+ * The rule reads as a sentence with editable slots, which is what makes this a
+ * GUI for the query rather than a form that happens to build one.
+ */
+.selection-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    padding: 5px 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.kw {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    color: #c586c0;
+    font-weight: 600;
+}
+
+.selection-row select {
+    font-size: 12px;
+    padding: 2px 4px;
+}
+
+.selection-row input.range {
+    width: 8ch;
+    font-family: var(--mono);
+    font-size: 12px;
+    text-align: center;
+    padding: 2px 4px;
+}
+
+.selection-count {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: var(--mono);
+}
+
+.child-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.rule-editor-empty {
+    padding: 24px 12px;
+    text-align: center;
+    color: var(--text-dim);
+}
+
+/* ---------------------------------------------------------------- */
+/* Attribute editor                                                  */
+/* ---------------------------------------------------------------- */
+
+.attr-editor {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.attr-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.attr-group > h4 {
+    margin: 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-dim);
+}
+
+.attr-row {
+    display: grid;
+    grid-template-columns: 84px 1fr;
+    align-items: center;
+    gap: 8px;
+}
+
+.attr-row > label {
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+.attr-row input,
+.attr-row select {
+    width: 100%;
+}
+
+.attr-inline {
+    display: flex;
+    gap: 6px;
+}
+
+/* The live "-> 401" line: the point of the whole panel. */
+.attr-preview {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 8px;
+    color: var(--ok);
+    word-break: break-word;
+}
+
+.attr-preview .arrow {
+    color: var(--text-dim);
+    margin-right: 6px;
+}
+
+.attr-editor-empty {
+    padding: 24px 12px;
+    text-align: center;
+    color: var(--text-dim);
+}

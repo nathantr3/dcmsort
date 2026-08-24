@@ -1,0 +1,49 @@
+{
+  "name": "dcmsort",
+  "version": "0.1.0",
+  "description": "Interactive DICOM sorting, splitting, and attribute modification",
+  "main": "src/main/main.js",
+  "author": "Nate Roberts",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "fixtures": "node test/fixtures/generate.js",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "drive": "node scripts/drive.mjs",
+    "smoke": "node scripts/drive.mjs --script scripts/smoke.txt",
+    "icon": "node scripts/make-icon.mjs"
+  },
+  "dependencies": {
+    "dcmjs": "^0.44.0"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^25.1.8",
+    "playwright-core": "^1.62.1",
+    "vitest": "^3.0.0"
+  },
+  "build": {
+    "appId": "com.nateroberts.dcmsort",
+    "productName": "dcmsort",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.medical",
+      "icon": "build/icon.icns"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.png"
+    }
+  }
+}

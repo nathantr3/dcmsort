@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'" />
+        <title>dcmsort</title>
+        <link rel="stylesheet" href="styles/app.css" />
+        <link rel="stylesheet" href="styles/tree.css" />
+        <link rel="stylesheet" href="styles/rules.css" />
+    </head>
+    <body>
+        <!-- Stage A: pick a folder, browse what was found, choose series. -->
+        <section id="stage-library" class="stage">
+            <header class="stage-header">
+                <div class="stage-title">
+                    <h1>dcmsort</h1>
+                    <p id="library-subtitle" class="muted">Choose a folder to search for DICOM files.</p>
+                </div>
+                <div class="stage-actions">
+                    <button id="btn-choose-folder" class="primary">Choose Folder...</button>
+                </div>
+            </header>
+
+            <div id="scan-progress" class="progress-bar hidden">
+                <div class="progress-track"><div class="progress-fill"></div></div>
+                <span class="progress-label"></span>
+                <button id="btn-cancel-scan" class="ghost small">Cancel</button>
+            </div>
+
+            <div id="library-empty" class="empty-state">
+                <p>No folder loaded.</p>
+                <p class="muted">
+                    dcmsort searches recursively, reads each file's header, and groups what it finds into
+                    exams and series.
+                </p>
+            </div>
+
+            <div id="library-tree" class="library-tree" hidden></div>
+
+            <footer id="library-footer" class="stage-footer" hidden>
+                <span id="library-selection-summary" class="muted">No series selected</span>
+                <button id="btn-analyze" class="primary" disabled>Analyze Selected</button>
+            </footer>
+        </section>
+
+        <!-- Stage B: the workspace. -->
+        <section id="stage-workspace" class="stage" hidden>
+            <header class="workspace-toolbar">
+                <button id="btn-back" class="ghost">&larr; Library</button>
+                <span id="workspace-title" class="workspace-title"></span>
+                <span class="spacer"></span>
+                <button id="btn-load-rules" class="ghost">Load Rules</button>
+                <button id="btn-save-rules" class="ghost">Save Rules</button>
+                <button id="btn-export" class="primary">Export...</button>
+            </header>
+
+            <div id="workspace-messages" class="messages"></div>
+
+            <div class="workspace-body">
+                <aside id="pane-files" class="pane pane-files">
+                    <div class="pane-header">
+                        <span>Files</span>
+                        <span id="file-count" class="muted small"></span>
+                    </div>
+                    <div id="file-list" class="file-list"></div>
+                    <div class="pane-footer">
+                        <label class="checkbox small">
+                            <input type="checkbox" id="chk-only-claimed" />
+                            <span>Only show files claimed by a rule</span>
+                        </label>
+                    </div>
+                </aside>
+
+                <main id="pane-center" class="pane pane-center">
+                    <section class="panel">
+                        <div class="pane-header">
+                            <span>Detected data</span>
+                            <span id="volume-summary" class="muted small"></span>
+                        </div>
+                        <div id="volume-panel" class="volume-panel"></div>
+                    </section>
+
+                    <section class="panel panel-grow">
+                        <div class="pane-header">
+                            <span>Child series</span>
+                            <button id="btn-add-child" class="ghost small">+ Add child series</button>
+                        </div>
+                        <div id="rule-editor" class="rule-editor"></div>
+                    </section>
+                </main>
+
+                <aside id="pane-attributes" class="pane pane-attributes">
+                    <div class="pane-header"><span>Attributes</span></div>
+                    <div id="attr-editor" class="attr-editor"></div>
+                </aside>
+            </div>
+        </section>
+
+        <!-- Export dialog -->
+        <div id="export-overlay" class="overlay" hidden>
+            <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="export-dialog-title">
+                <h2 id="export-dialog-title">Export</h2>
+                <div id="export-summary" class="dialog-summary"></div>
+
+                <fieldset class="dialog-section">
+                    <legend>Destination</legend>
+                    <label class="radio">
+                        <input type="radio" name="export-mode" value="new-folder" checked />
+                        <span>
+                            <strong>Save to a new folder</strong>
+                            <em class="muted">Sources are left untouched.</em>
+                        </span>
+                    </label>
+                    <div id="export-folder-row" class="folder-row">
+                        <input type="text" id="export-folder" placeholder="No folder chosen" readonly />
+                        <button id="btn-choose-export-folder" class="ghost small">Choose...</button>
+                    </div>
+
+                    <label class="radio">
+                        <input type="radio" name="export-mode" value="in-place" />
+                        <span>
+                            <strong>Write in place</strong>
+                            <em class="warn">Overwrites the source files. This cannot be undone.</em>
+                        </span>
+                    </label>
+                    <label id="inplace-confirm-row" class="checkbox hidden">
+                        <input type="checkbox" id="chk-inplace-confirm" />
+                        <span>I understand the source files will be overwritten.</span>
+                    </label>
+                </fieldset>
+
+                <div id="export-progress" class="progress-bar hidden">
+                    <div class="progress-track"><div class="progress-fill"></div></div>
+                    <span class="progress-label"></span>
+                </div>
+
+                <div id="export-result" class="dialog-result hidden"></div>
+
+                <div class="dialog-actions">
+                    <button id="btn-export-cancel" class="ghost">Cancel</button>
+                    <button id="btn-export-run" class="primary">Export</button>
+                </div>
+            </div>
+        </div>
+
+        <script type="module" src="js/app.js"></script>
+    </body>
+</html>

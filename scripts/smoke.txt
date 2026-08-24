@@ -1,0 +1,15 @@
+# End-to-end smoke run: scan the fixtures, analyze the 3-cohort series,
+# narrow the default child series, and screenshot the result.
+launch test/fixtures/data
+text #library-subtitle
+click-text MULTI RECON
+sleep 300
+click #btn-analyze
+sleep 2000
+text #volume-panel
+set .child-card input.range:nth-of-type(2) = 1-3
+sleep 700
+text .child-card .child-preview
+ss smoke-workspace
+logs
+quit
