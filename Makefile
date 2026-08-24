@@ -21,7 +21,7 @@ endif
 OPEN ?= $(FIXTURES)
 
 .DEFAULT_GOAL := help
-.PHONY: help install fixtures test watch run run-blank drive smoke icon \
+.PHONY: help install fixtures test watch run run-blank drive smoke focus-check icon \
         dist-mac dist-mac-x64 dist-mac-universal dist-win pack clean distclean
 
 ## help: list the available targets
@@ -68,6 +68,10 @@ drive: $(NODE_MODULES) $(FIXTURES)
 ## smoke: launch the real app and drive one workflow end to end
 smoke: $(NODE_MODULES) $(FIXTURES)
 	node scripts/drive.mjs --script scripts/smoke.txt
+
+## focus-check: assert the editors never steal focus from a field being typed in
+focus-check: $(NODE_MODULES) $(FIXTURES)
+	node scripts/drive.mjs --script scripts/focus.txt
 
 ## icon: rebuild build/icon.icns and build/icon.png from build/icon.svg
 icon: $(ICON)

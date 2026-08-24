@@ -1,0 +1,44 @@
+# Regression check: editing a field must not steal focus from it.
+#
+# The rule and attribute panels re-render whenever the preview refreshes, which
+# happens on every keystroke. If a render rebuilds the DOM rather than patching
+# it, the field being typed into is destroyed and focus falls back to <body> -
+# so every `active` line below must name a real field, never "body".
+
+launch test/fixtures/data
+click-text MULTI RECON
+sleep 300
+click #btn-analyze
+sleep 2000
+
+# Clicking a name field fires focusChild; the field must survive it.
+focus .child-card[data-child-id="cs-1"] .child-label-input
+sleep 400
+active
+
+# Type past the debounce, so a preview refresh lands mid-word.
+press Meta+a
+type Early phases
+sleep 600
+active
+type " 1-3"
+sleep 600
+active
+text .child-card[data-child-id="cs-1"] .child-preview
+
+# Same for the attribute panel's text fields.
+focus #attr-editor .attr-group:nth-of-type(3) .attr-row:nth-of-type(4) input
+type My Feature:
+sleep 600
+active
+
+# And for a range field in the rule sentence.
+focus .child-card[data-child-id="cs-1"] input.range:nth-of-type(2)
+press Meta+a
+type 1-3
+sleep 600
+active
+text .child-card[data-child-id="cs-1"] .selection-count
+
+logs
+quit

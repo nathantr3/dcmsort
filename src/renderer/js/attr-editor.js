@@ -38,11 +38,14 @@ function checkbox(label, checked, onChange, title) {
     ]);
 }
 
-function preview(text) {
-    return el("div", { class: "attr-preview" }, [el("span", { class: "arrow", text: "->" }), el("span", { text })]);
+function preview() {
+    const value = el("span");
+    const node = el("div", { class: "attr-preview" }, [el("span", { class: "arrow", text: "->" }), value]);
+    node._value = value;
+    return node;
 }
 
-function seriesNumberGroup(attrs, resolved, set) {
+function seriesNumberGroup(attrs, set) {
     const isScale = attrs.seriesNumberMode !== "absolute";
 
     const modeSelect = el(
@@ -54,12 +57,9 @@ function seriesNumberGroup(attrs, resolved, set) {
         ]
     );
 
-    const base = resolved?.baseSeriesNumber;
-    const formula = isScale
-        ? `${attrs.seriesScale ?? 1} x ${base ?? 0} + ${attrs.seriesOffset ?? 0}  =  ${resolved?.seriesNumber ?? "-"}`
-        : String(resolved?.seriesNumber ?? "-");
+    const numberPreview = preview();
 
-    return el("div", { class: "attr-group" }, [
+    const group = el("div", { class: "attr-group" }, [
         el("h4", { text: "Series number" }),
         row("Mode", modeSelect),
         isScale
@@ -78,11 +78,14 @@ function seriesNumberGroup(attrs, resolved, set) {
                       "Used verbatim, ignoring the source series number"
                   )
               ),
-        preview(formula)
+        numberPreview
     ]);
+
+    group._numberPreview = numberPreview;
+    return group;
 }
 
-function descriptionGroup(attrs, resolved, set) {
+function descriptionGroup(attrs, set) {
     const isReplace = attrs.descriptionMode === "replace";
 
     const modeSelect = el("select", { on: { change: (e) => set({ descriptionMode: e.target.value }) } }, [
@@ -90,7 +93,10 @@ function descriptionGroup(attrs, resolved, set) {
         el("option", { value: "replace", text: "Replace", selected: isReplace })
     ]);
 
-    return el("div", { class: "attr-group" }, [
+    const from = el("div", { class: "muted small" });
+    const descPreview = preview();
+
+    const group = el("div", { class: "attr-group" }, [
         el("h4", { text: "Series description" }),
         row("Mode", modeSelect),
         row(
@@ -121,9 +127,13 @@ function descriptionGroup(attrs, resolved, set) {
             (v) => set({ stripExistingPrefix: v }),
             "Stops the prefix above stacking up when a folder is exported more than once"
         ),
-        el("div", { class: "muted small", text: `from "${resolved?.baseSeriesDescription ?? ""}"` }),
-        preview(resolved?.seriesDescription || "(empty)")
+        from,
+        descPreview
     ]);
+
+    group._from = from;
+    group._descPreview = descPreview;
+    return group;
 }
 
 function identityGroup(attrs, set) {
@@ -189,10 +199,48 @@ function colorGroup(child, actions, palette) {
     ]);
 }
 
+/**
+ * As in the rule editor, rebuilding the panel would steal focus from whichever
+ * field is being typed into. The DOM is rebuilt only when the set of controls
+ * actually changes - a different child series, or a mode switch that swaps one
+ * row for another - and the live previews are patched in place otherwise.
+ */
+function structureKey(child) {
+    if (!child) return "none";
+    const { seriesNumberMode, descriptionMode } = child.attributes;
+    return `${child.id}:${seriesNumberMode}:${descriptionMode}:${child.color}`;
+}
+
+let groups = null;
+let lastKey = null;
+
+function patch(child, resolved) {
+    if (!groups) return;
+
+    const attrs = child.attributes;
+    const isScale = attrs.seriesNumberMode !== "absolute";
+    groups.number._numberPreview._value.textContent = isScale
+        ? `${attrs.seriesScale ?? 1} x ${resolved?.baseSeriesNumber ?? 0} + ${attrs.seriesOffset ?? 0}  =  ${resolved?.seriesNumber ?? "-"}`
+        : String(resolved?.seriesNumber ?? "-");
+
+    groups.description._from.textContent = `from "${resolved?.baseSeriesDescription ?? ""}"`;
+    groups.description._descPreview._value.textContent = resolved?.seriesDescription || "(empty)";
+    groups.heading.textContent = `Editing ${child.label}`;
+}
+
 export function renderAttrEditor(container, { ruleSet, preview: plan, focusedChildId, actions, palette }) {
+    const child = ruleSet.childSeries.find((cs) => cs.id === focusedChildId);
+    const key = structureKey(child);
+    const resolved = child ? (plan?.childSeries || []).find((cs) => cs.id === child.id) : null;
+
+    if (key === lastKey && container.childElementCount) {
+        patch(child, resolved);
+        return;
+    }
+    lastKey = key;
+    groups = null;
     clear(container);
 
-    const child = ruleSet.childSeries.find((cs) => cs.id === focusedChildId);
     if (!child) {
         container.append(
             el("div", { class: "attr-editor-empty" }, [
@@ -202,14 +250,19 @@ export function renderAttrEditor(container, { ruleSet, preview: plan, focusedChi
         return;
     }
 
-    const resolved = (plan?.childSeries || []).find((cs) => cs.id === child.id);
-    const set = (patch) => actions.updateChildAttributes(child.id, patch);
+    const set = (patchAttrs) => actions.updateChildAttributes(child.id, patchAttrs);
+    const heading = el("div", { class: "muted small" });
+    const number = seriesNumberGroup(child.attributes, set);
+    const description = descriptionGroup(child.attributes, set);
 
-    container.append(
-        el("div", { class: "muted small", text: `Editing ${child.label}` }),
-        seriesNumberGroup(child.attributes, resolved, set),
-        descriptionGroup(child.attributes, resolved, set),
-        identityGroup(child.attributes, set),
-        colorGroup(child, actions, palette)
-    );
+    container.append(heading, number, description, identityGroup(child.attributes, set), colorGroup(child, actions, palette));
+
+    groups = { heading, number, description };
+    patch(child, resolved);
+}
+
+/** Drop cached nodes so the next render rebuilds from scratch. */
+export function resetAttrEditor() {
+    groups = null;
+    lastKey = null;
 }

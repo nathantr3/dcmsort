@@ -18,7 +18,14 @@ export function el(tag, props = {}, children = []) {
         if (key === "class") node.className = value;
         else if (key === "text") node.textContent = value;
         else if (key === "dataset") Object.assign(node.dataset, value);
-        else if (key === "style") Object.assign(node.style, value);
+        // Custom properties have to go through setProperty; assigning them as
+        // plain style keys silently does nothing.
+        else if (key === "style") {
+            for (const [prop, val] of Object.entries(value)) {
+                if (prop.startsWith("--")) node.style.setProperty(prop, val);
+                else node.style[prop] = val;
+            }
+        }
         else if (key === "on") for (const [type, fn] of Object.entries(value)) node.addEventListener(type, fn);
         else if (key in node) node[key] = value;
         else node.setAttribute(key, value);

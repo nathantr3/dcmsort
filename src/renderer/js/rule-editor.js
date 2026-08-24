@@ -51,14 +51,16 @@ function selectionRow({ selection, index, childId, volumes, resolvedCount, actio
             }
         });
 
-    return el("div", { class: "selection-row" }, [
+    const count = el("span", { class: "selection-count" });
+
+    const row = el("div", { class: "selection-row" }, [
         el("span", { class: "kw", text: "FROM" }),
         volumeSelect,
         el("span", { class: "kw", text: "SELECT slices" }),
         rangeInput("slices", selection.slices, volume?.slices ?? 0),
         el("span", { class: "kw", text: "AND phases" }),
         rangeInput("phases", selection.phases, volume?.phases ?? 0),
-        el("span", { class: "selection-count", text: resolvedCount === null ? "" : `${resolvedCount} files` }),
+        count,
         el("button", {
             class: "ghost small",
             text: "x",
@@ -66,9 +68,14 @@ function selectionRow({ selection, index, childId, volumes, resolvedCount, actio
             on: { click: () => actions.removeSelection(childId, index) }
         })
     ]);
+
+    row._count = count;
+    return row;
 }
 
-function childCard({ child, resolved, volumes, focused, actions }) {
+function childCard({ child, volumes, actions }) {
+    const preview = el("span", { class: "child-preview" });
+
     const head = el(
         "div",
         {
@@ -92,15 +99,7 @@ function childCard({ child, resolved, volumes, focused, actions }) {
                     focus: () => actions.focusChild(child.id)
                 }
             }),
-            el("span", { class: "child-preview" }, [
-                resolved
-                    ? el("span", {}, [
-                          el("strong", { text: String(resolved.seriesNumber ?? "-") }),
-                          document.createTextNode(`  ${resolved.seriesDescription || ""}  -  `),
-                          document.createTextNode(pluralize(resolved.fileCount, "file"))
-                      ])
-                    : document.createTextNode("no files")
-            ]),
+            preview,
             el("span", { class: "spacer" }),
             el("button", {
                 class: "ghost small",
@@ -115,19 +114,12 @@ function childCard({ child, resolved, volumes, focused, actions }) {
         ]
     );
 
-    const countsBySelection = resolved?.selectionCounts || [];
+    const rows = child.selections.map((selection, i) =>
+        selectionRow({ selection, index: i, childId: child.id, volumes, actions })
+    );
 
     const body = el("div", { class: "child-body" }, [
-        ...child.selections.map((selection, i) =>
-            selectionRow({
-                selection,
-                index: i,
-                childId: child.id,
-                volumes,
-                resolvedCount: countsBySelection[i] ?? null,
-                actions
-            })
-        ),
+        ...rows,
         child.selections.length
             ? null
             : el("div", { class: "muted small", text: "No selections yet - add one to choose images." }),
@@ -141,18 +133,78 @@ function childCard({ child, resolved, volumes, focused, actions }) {
         ])
     ]);
 
-    return el(
+    const card = el(
         "div",
         {
-            class: `child-card${focused ? " focused" : ""}`,
+            class: "child-card",
             style: { "--child-color": child.color },
             dataset: { childId: child.id }
         },
         [head, body]
     );
+
+    card._preview = preview;
+    card._rows = rows;
+    return card;
+}
+
+/**
+ * Rebuilding this panel destroys whatever input the user is typing in, so the
+ * DOM is only rebuilt when the *structure* changes - a child series or a
+ * selection added, removed, or recoloured. Everything else (the resolved
+ * counts, the series number and description preview, which card is focused)
+ * is patched onto the existing nodes.
+ *
+ * Without that split, clicking into a name field fires focusChild, which
+ * re-rendered the panel and took the field away mid-click.
+ */
+function structureKey(ruleSet) {
+    return ruleSet.childSeries
+        .map((cs) => `${cs.id}:${cs.selections.length}:${cs.color}`)
+        .join("|");
+}
+
+let cards = new Map();
+let lastKey = null;
+
+/** Update only what the rules resolved to; never touch a user-editable field. */
+function patch(preview, ruleSet, focusedChildId) {
+    const resolvedById = new Map((preview?.childSeries || []).map((cs) => [cs.id, cs]));
+
+    for (const child of ruleSet.childSeries) {
+        const card = cards.get(child.id);
+        if (!card) continue;
+
+        const resolved = resolvedById.get(child.id);
+        card.classList.toggle("focused", child.id === focusedChildId);
+
+        clear(card._preview);
+        if (resolved && resolved.fileCount) {
+            card._preview.append(
+                el("strong", { text: String(resolved.seriesNumber ?? "-") }),
+                document.createTextNode(`  ${resolved.seriesDescription || ""}  -  `),
+                document.createTextNode(pluralize(resolved.fileCount, "file"))
+            );
+        } else {
+            card._preview.append(document.createTextNode("no files"));
+        }
+
+        const counts = resolved?.selectionCounts || [];
+        card._rows.forEach((row, i) => {
+            row._count.textContent = counts[i] === undefined ? "" : `${counts[i]} files`;
+        });
+    }
 }
 
 export function renderRuleEditor(container, { ruleSet, preview, volumes, focusedChildId, actions }) {
+    const key = structureKey(ruleSet);
+
+    if (key === lastKey && container.childElementCount) {
+        patch(preview, ruleSet, focusedChildId);
+        return;
+    }
+    lastKey = key;
+    cards = new Map();
     clear(container);
 
     if (!ruleSet.childSeries.length) {
@@ -174,17 +226,16 @@ export function renderRuleEditor(container, { ruleSet, preview, volumes, focused
         return;
     }
 
-    const resolvedById = new Map((preview?.childSeries || []).map((cs) => [cs.id, cs]));
-
     for (const child of ruleSet.childSeries) {
-        container.append(
-            childCard({
-                child,
-                resolved: resolvedById.get(child.id),
-                volumes,
-                focused: child.id === focusedChildId,
-                actions
-            })
-        );
+        const card = childCard({ child, volumes, actions });
+        cards.set(child.id, card);
+        container.append(card);
     }
+    patch(preview, ruleSet, focusedChildId);
+}
+
+/** Drop cached nodes so the next render rebuilds from scratch. */
+export function resetRuleEditor() {
+    cards = new Map();
+    lastKey = null;
 }

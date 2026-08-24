@@ -2,8 +2,8 @@ import { el, clear, $, pluralize } from "./dom.js";
 import { renderLibrary } from "./library-view.js";
 import { renderFileList, paintFileList, setOnlyClaimed, fileListSummary } from "./file-list.js";
 import { renderVolumePanel, paintVolumePanel } from "./volume-panel.js";
-import { renderRuleEditor, paletteColor, PALETTE } from "./rule-editor.js";
-import { renderAttrEditor } from "./attr-editor.js";
+import { renderRuleEditor, resetRuleEditor, paletteColor, PALETTE } from "./rule-editor.js";
+import { renderAttrEditor, resetAttrEditor } from "./attr-editor.js";
 import { initExportDialog, openExportDialog } from "./export-dialog.js";
 
 /**
@@ -171,6 +171,10 @@ function renderWorkspaceStructure() {
     $("#workspace-title").textContent = analysis.series
         .map((s) => `${s.seriesNumber ?? "-"} ${s.seriesDescription}`)
         .join("   |   ");
+
+    // The editors cache their DOM between renders; a new analysis invalidates it.
+    resetRuleEditor();
+    resetAttrEditor();
 
     renderFileList($("#file-list"), analysis.series);
     $("#file-count").textContent = fileListSummary(analysis.series);

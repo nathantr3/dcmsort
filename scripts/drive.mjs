@@ -119,6 +119,51 @@ const COMMANDS = {
         console.log("set", selector, "=", JSON.stringify(value), "->", result);
     },
 
+    /** focus <selector> - move keyboard focus to a field. */
+    async focus(selector) {
+        const result = await page.evaluate((s) => {
+            const node = document.querySelector(s);
+            if (!node) return "NOT_FOUND";
+            node.focus();
+            return "OK";
+        }, selector);
+        console.log("focus", selector, "->", result);
+    },
+
+    /**
+     * type <text> - type at the keyboard, one character at a time.
+     * Wrap in double quotes to keep leading or trailing spaces.
+     */
+    async type(text) {
+        const literal = /^".*"$/s.test(text) ? text.slice(1, -1) : text;
+        await page.keyboard.type(literal, { delay: 40 });
+    },
+
+    /** press <key> - press a single key, e.g. `press Meta+a`. */
+    async press(key) {
+        await page.keyboard.press(key);
+    },
+
+    /**
+     * active - report which element has focus and what it holds.
+     *
+     * Re-rendering a panel destroys the field the user is typing in, and the
+     * only symptom is focus quietly moving to <body>. This makes that visible.
+     */
+    async active() {
+        console.log(
+            await page.evaluate(`(() => {
+                const a = document.activeElement;
+                if (!a || a === document.body) return "body (nothing focused)";
+                const card = a.closest && a.closest("[data-child-id]");
+                return [a.tagName.toLowerCase(), a.className && "." + a.className.split(" ").join("."),
+                        card && " in " + card.dataset.childId,
+                        a.value !== undefined && " value=" + JSON.stringify(a.value)]
+                    .filter(Boolean).join("");
+            })()`)
+        );
+    },
+
     async text(selector) {
         console.log(
             await page.evaluate(
