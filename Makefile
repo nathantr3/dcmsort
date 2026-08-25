@@ -17,6 +17,9 @@ ifeq ($(SIGN),0)
 export CSC_IDENTITY_AUTO_DISCOVERY := false
 endif
 
+# Disable certificate validation for corporate proxy environments
+export NODE_TLS_REJECT_UNAUTHORIZED := 0
+
 # Folder to open for `make run` / `make smoke`.
 OPEN ?= $(FIXTURES)
 
@@ -79,9 +82,9 @@ icon: $(ICON)
 $(ICON) $(ICON_PNG): build/icon.svg scripts/make-icon.mjs scripts/icon-host.js | $(NODE_MODULES)
 	node scripts/make-icon.mjs
 
-## dist-mac: build the macOS arm64 dmg
+## dist-mac: build the macOS arm64 zip
 dist-mac: $(NODE_MODULES) $(ICON)
-	npx electron-builder --mac --arm64
+	npx electron-builder --mac=zip --arm64
 
 ## dist-mac-x64: build the macOS Intel dmg
 dist-mac-x64: $(NODE_MODULES) $(ICON)
