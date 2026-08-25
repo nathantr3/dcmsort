@@ -369,6 +369,24 @@ describe("rule set portability", () => {
         // The old behaviour is unchanged by the new field being absent.
         expect(computeDescription(attrs, "NOT DIAGNOSTIC: T1 VIBE")).toBe("NOT DIAGNOSTIC: T1 VIBE");
     });
+
+    it("loads a rule file written before provenance and phase keys were saved", () => {
+        const loaded = normalizeRuleSet({
+            version: 1,
+            sourceSeries: ["1.2.3"],
+            childSeries: [{ id: "cs-1", selections: [{ volumeId: "v1" }] }]
+        });
+        expect(loaded.source).toBeNull();
+        expect(loaded.phaseKeyOverrides).toEqual({});
+        // sourceSeries survives, but only as a record of where the rules came
+        // from: nothing in resolution consults it.
+        expect(loaded.sourceSeries).toEqual(["1.2.3"]);
+    });
+
+    it("carries saved phase-key overrides through a round trip", () => {
+        const loaded = normalizeRuleSet({ phaseKeyOverrides: { v1: "TriggerTime" }, childSeries: [] });
+        expect(loaded.phaseKeyOverrides).toEqual({ v1: "TriggerTime" });
+    });
 });
 
 describe("findRuleFile", () => {

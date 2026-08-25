@@ -9,6 +9,7 @@ FIXTURES     := test/fixtures/data
 ICON         := build/icon.icns
 ICON_PNG     := build/icon.png
 DIST         := dist
+APP          := $(DIST)/mac-arm64/dcmsort.app
 
 # Code signing is off by default: a local build should not need a Developer ID.
 # Override with `make dist-mac SIGN=1` once you have a certificate installed.
@@ -23,9 +24,12 @@ export NODE_TLS_REJECT_UNAUTHORIZED := 0
 # Folder to open for `make run` / `make smoke`.
 OPEN ?= $(FIXTURES)
 
+# Arguments for `make cli`.
+ARGS ?= --help
+
 .DEFAULT_GOAL := help
 .PHONY: help install fixtures test watch run run-blank drive smoke focus-check icon \
-        dist-mac dist-mac-x64 dist-mac-universal dist-win pack clean distclean
+        cli cli-link dist-mac dist-mac-x64 dist-mac-universal dist-win pack clean distclean
 
 ## help: list the available targets
 help:
@@ -75,6 +79,15 @@ smoke: $(NODE_MODULES) $(FIXTURES)
 ## focus-check: assert the editors never steal focus from a field being typed in
 focus-check: $(NODE_MODULES) $(FIXTURES)
 	node scripts/drive.mjs --script scripts/focus.txt
+
+## cli: run the headless CLI from source, e.g. make cli ARGS="list --folder ."
+cli: $(NODE_MODULES) $(FIXTURES)
+	node src/cli/cli.js $(ARGS)
+
+## cli-link: symlink the built mac app's CLI into /usr/local/bin (needs sudo)
+cli-link: $(APP)
+	sudo ln -sf "$(abspath $(APP))/Contents/Resources/dcmsort" /usr/local/bin/dcmsort
+	@echo "linked: $$(command -v dcmsort)"
 
 ## icon: rebuild build/icon.icns and build/icon.png from build/icon.svg
 icon: $(ICON)

@@ -8,6 +8,11 @@
  * child series is one output series, defined by selections that read as
  * "FROM volume 1 SELECT slices * AND phases 1-3", plus the attribute edits to
  * apply to whatever those selections match.
+ *
+ * Selections bind to volumes positionally, by id, and to nothing else. The
+ * `source` and `sourceSeries` fields record where a rule set came from and are
+ * informational: they say what it was built on, never what it may be applied
+ * to. That is what lets one saved file be re-run against other series.
  */
 
 const fsp = require("fs/promises");
@@ -193,6 +198,23 @@ function fingerprintVolumes(analysis) {
     return out;
 }
 
+/**
+ * The provenance block written into a saved rule set: which series the rules
+ * were built on, in enough detail for a human to recognise them later.
+ */
+function describeSource(analysis) {
+    if (!analysis) return null;
+    return {
+        series: analysis.series.map((s) => ({
+            seriesInstanceUID: s.seriesInstanceUID,
+            seriesNumber: s.seriesNumber ?? null,
+            seriesDescription: s.seriesDescription ?? null,
+            modality: s.modality ?? null,
+            fileCount: s.fileCount ?? null
+        }))
+    };
+}
+
 /** Compare a saved rule set's fingerprints against a fresh analysis. */
 function checkRuleSetFit(ruleSet, analysis) {
     const current = fingerprintVolumes(analysis);
@@ -227,8 +249,14 @@ function normalizeRuleSet(ruleSet) {
     }));
     return {
         version: RULESET_VERSION,
+        // Provenance only - see the header comment.
         sourceSeries: ruleSet?.sourceSeries || [],
+        source: ruleSet?.source || null,
         volumeFingerprints: ruleSet?.volumeFingerprints || null,
+        // volumeId -> DICOM keyword, the shape analyzeSelection takes. Kept in
+        // the file because the phase ordering decides what "phases 1-3" means;
+        // re-detecting it elsewhere could quietly select different images.
+        phaseKeyOverrides: ruleSet?.phaseKeyOverrides || {},
         childSeries
     };
 }
@@ -473,6 +501,7 @@ module.exports = {
     emptyRuleSet,
     normalizeRuleSet,
     fingerprintVolumes,
+    describeSource,
     checkRuleSetFit,
     computeSeriesNumber,
     computeDescription,

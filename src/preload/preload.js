@@ -17,7 +17,8 @@ const api = {
 
     previewRules: (ruleSet) => ipcRenderer.invoke("rules:preview", { ruleSet }),
     checkRules: (ruleSet) => ipcRenderer.invoke("rules:check", { ruleSet }),
-    saveRuleSet: (ruleSet) => ipcRenderer.invoke("rules:save", { ruleSet }),
+    saveRuleSet: (ruleSet, phaseKeyOverrides) =>
+        ipcRenderer.invoke("rules:save", { ruleSet, phaseKeyOverrides }),
     loadRuleSet: () => ipcRenderer.invoke("rules:load"),
 
     exportRules: (ruleSet, target) => ipcRenderer.invoke("export:run", { ruleSet, target }),

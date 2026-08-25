@@ -140,6 +140,55 @@ with the child series id appended. Files no rule claims are left exactly as they
 Every file is staged to a temporary path and renamed into place, so an interrupted or failing write
 never leaves a half-written DICOM. A file that fails is recorded and the export continues.
 
+## Command line
+
+The same engine runs headless, for scripting a saved rule set over a folder:
+
+```bash
+dcmsort apply --rules cardiac.dcmsort.json --folder /data/patient42 --out /data/out
+dcmsort apply --rules cardiac.dcmsort.json --folder /data/patient42 --in-place
+dcmsort list    --folder /data/patient42      # exams, series, UIDs
+dcmsort analyze --folder /data/patient42      # detected volumes, slices x phases
+```
+
+`apply` takes **each series in the folder on its own**: it analyzes that series
+alone - so its volumes always start at `v1` - and offers the rule set to it. A
+series whose volumes cannot satisfy the rules is skipped with a reason and the
+run carries on, which is what lets one saved file be re-run over folders it was
+not built on. The `sourceSeries` and `source` fields in a rule file record where
+the rules came from and never constrain where they may be applied.
+
+Narrow the run with `--series`, repeatable, taking a SeriesNumber, a
+SeriesInstanceUID, or a substring of the SeriesDescription. `--dry-run` reports
+what would be written without writing it, `--json` emits the summary for a
+script to read, and `--strict` skips any series whose volume shapes differ from
+the ones the rules were saved on. `dcmsort --help` lists everything.
+
+Exit status is 0 when nothing failed - including a run where the rules fitted no
+series at all - and 1 when a file could not be read or written.
+
+### Getting the command
+
+From a checkout, `node src/cli/cli.js ...`, `npm run cli -- ...`, or
+`make cli ARGS="list --folder /data"`.
+
+The packaged apps ship it too. A bundle already carries a complete Node runtime -
+its own Electron binary, which runs any script as plain Node - so the CLI needs
+no second runtime and cannot drift from the app it ships with.
+
+```bash
+# macOS
+/Applications/dcmsort.app/Contents/Resources/dcmsort apply --rules r.json --folder /data --out /out
+sudo ln -s /Applications/dcmsort.app/Contents/Resources/dcmsort /usr/local/bin/dcmsort   # or: make cli-link
+```
+
+```bat
+rem Windows
+"C:\Program Files\dcmsort\resources\dcmsort.cmd" apply --rules r.json --folder D:\data --out D:\out
+```
+
+Add that `resources` folder to `PATH` for a bare `dcmsort` on Windows.
+
 ## Architecture
 
 ```
@@ -152,9 +201,13 @@ src/main/       Electron main process: all filesystem and DICOM work
   rules.js      range parsing, rule resolution, attribute formulas
   export.js     writing, in place or to a new folder
   ipc.js        the entire main/renderer boundary
+src/cli/        headless entry point, same engine, no Electron
 src/preload/    contextBridge surface (window.dcmsort)
 src/renderer/   vanilla HTML/CSS/JS, no framework, no build step
 ```
+
+Nothing under `src/main/` imports Electron except `ipc.js` and `main.js`, which is what lets the CLI
+and the unit tests drive the same engine under plain Node.
 
 Scan records are heavy and never leave the main process; the renderer receives only the projections
 it needs to draw. Headers are parsed with `untilTag` so pixel data is never decoded during a scan,

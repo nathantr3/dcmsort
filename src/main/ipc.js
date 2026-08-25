@@ -196,7 +196,7 @@ function register() {
         return rules.checkRuleSetFit(ruleSet, state.analysis);
     });
 
-    ipcMain.handle("rules:save", async (event, { ruleSet }) => {
+    ipcMain.handle("rules:save", async (event, { ruleSet, phaseKeyOverrides }) => {
         const win = BrowserWindow.fromWebContents(event.sender);
         const result = await dialog.showSaveDialog(win, {
             title: "Save rule set",
@@ -207,6 +207,10 @@ function register() {
 
         const document = {
             ...rules.normalizeRuleSet(ruleSet),
+            // The phase ordering decides what "phases 1-3" selects, so an
+            // override the user made by hand has to travel with the rules.
+            phaseKeyOverrides: phaseKeyOverrides || {},
+            source: rules.describeSource(state.analysis),
             volumeFingerprints: state.analysis ? rules.fingerprintVolumes(state.analysis) : null,
             savedAt: new Date().toISOString()
         };

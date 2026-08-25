@@ -202,6 +202,12 @@ async function analyzeSelected() {
     const uids = [...state.selectedSeries];
     if (!uids.length) return;
 
+    // A rule set found in the folder carries the phase ordering it was built
+    // on; adopt it before the first analysis rather than re-detecting.
+    if (state.pendingRuleSet?.phaseKeyOverrides) {
+        state.phaseKeyOverrides = { ...state.phaseKeyOverrides, ...state.pendingRuleSet.phaseKeyOverrides };
+    }
+
     const analysis = await window.dcmsort.analyzeSelection(uids, state.phaseKeyOverrides);
     // Rules found alongside the folder are consumed here: the spread keeps the
     // saved volumeFingerprints, which checkRules needs to spot a mismatch.
@@ -451,8 +457,26 @@ const workspaceActions = {
 /* Rule set persistence                                                */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Adopt the phase-key overrides a rule set was saved with and re-analyze if
+ * any of them differ from what is in force. Returns whether the analysis
+ * changed, so the caller can rebuild the volume panel.
+ */
+async function restorePhaseKeys(ruleSet) {
+    const saved = ruleSet.phaseKeyOverrides || {};
+    const changed = Object.entries(saved).filter(([id, key]) => state.phaseKeyOverrides[id] !== key);
+    if (!changed.length) return false;
+
+    state.phaseKeyOverrides = { ...state.phaseKeyOverrides, ...saved };
+    state.analysis = await window.dcmsort.analyzeSelection(
+        [...state.selectedSeries],
+        state.phaseKeyOverrides
+    );
+    return true;
+}
+
 async function saveRules() {
-    const savedTo = await window.dcmsort.saveRuleSet(state.ruleSet);
+    const savedTo = await window.dcmsort.saveRuleSet(state.ruleSet, state.phaseKeyOverrides);
     if (savedTo) {
         setMessages([...state.messages, { level: "info", message: `Saved rules to ${savedTo}` }]);
     }
@@ -466,6 +490,10 @@ async function loadRules() {
     state.focusedChildId = loaded.ruleSet.childSeries[0]?.id ?? null;
     // Keep generated ids from colliding with the ones we just loaded.
     state.nextChildIndex = loaded.ruleSet.childSeries.length;
+
+    // The saved phase ordering has to come back before the preview, or the
+    // rules would resolve against a different ordering than they were built on.
+    if (await restorePhaseKeys(loaded.ruleSet)) renderWorkspaceStructure();
 
     await refreshPreview();
     if (loaded.problems.length) {
