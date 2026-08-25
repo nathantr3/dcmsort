@@ -140,4 +140,4 @@ async function scanDirectory(root, { onProgress, signal } = {}) {
     };
 }
 
-module.exports = { scanDirectory, collectFiles };
+module.exports = { scanDirectory, collectFiles, SKIP_DIRS };

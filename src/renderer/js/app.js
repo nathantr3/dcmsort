@@ -5,6 +5,7 @@ import { renderVolumePanel, paintVolumePanel } from "./volume-panel.js";
 import { renderRuleEditor, resetRuleEditor, paletteColor, PALETTE } from "./rule-editor.js";
 import { renderAttrEditor, resetAttrEditor } from "./attr-editor.js";
 import { initExportDialog, openExportDialog } from "./export-dialog.js";
+import { initRulePicker, openRulePicker } from "./rule-picker.js";
 
 /**
  * App coordinator: owns the state, wires the views, and is the only module that
@@ -27,9 +28,12 @@ const state = {
     focusedChildId: null,
     messages: [],
     nextChildIndex: 0,
-    // A rule set found next to the DICOMs, waiting for an analysis to apply to.
+    // A rule set found with the DICOMs, waiting for an analysis to apply to.
     pendingRuleSet: null,
-    pendingRuleFile: null
+    pendingRuleFile: null,
+    // Every usable rule file the folder holds. More than one and the choice
+    // goes to the user, at Analyze.
+    ruleCandidates: []
 };
 
 /* ------------------------------------------------------------------ */
@@ -108,6 +112,7 @@ async function chooseAndScan() {
 async function scan(root) {
     state.pendingRuleSet = null;
     state.pendingRuleFile = null;
+    state.ruleCandidates = [];
     setLibraryMessages([]);
 
     const bar = $("#scan-progress");
@@ -134,7 +139,7 @@ async function scan(root) {
         state.library = result.library;
         state.selectedSeries = new Set();
         renderLibraryStage();
-        applyDiscoveredRules(result.ruleFile);
+        applyDiscoveredRules(result.ruleFiles);
 
         if (!result.library.studies.length) {
             $("#library-subtitle").textContent = `${root}  -  no DICOM files found`;
@@ -156,40 +161,69 @@ async function scan(root) {
 function applyDiscoveredRules(found) {
     if (!found) return;
 
-    if (found.ambiguous) {
+    const messages = found.rejected.map((r) => ({
+        level: "warning",
+        message: `Ignored ${r.relativePath}: ${r.reason}`
+    }));
+
+    const candidates = found.candidates;
+    state.ruleCandidates = candidates;
+
+    if (!candidates.length) {
+        setLibraryMessages(messages);
+        return;
+    }
+
+    // With several to choose from there is no sensible default, so nothing is
+    // adopted yet: the choice is put to the user on Analyze, by which point
+    // the summaries can be read against a real selection. Everything any of
+    // them fits is ticked so that button is reachable.
+    if (candidates.length > 1) {
+        for (const candidate of candidates) {
+            for (const uid of candidate.fittingSeries) state.selectedSeries.add(uid);
+        }
+        renderLibraryStage();
+
         setLibraryMessages([
+            ...messages,
             {
                 level: "info",
-                message: `This folder has several rule files (${found.ambiguous.join(", ")}) and none named rules.dcmsort.json, so none was loaded. Pick one with File > Load Rule Set.`
+                message: `This folder holds ${pluralize(candidates.length, "rule set")}. You will be asked which to use when you press Analyze Selected.`
             }
         ]);
         return;
     }
 
-    if (found.error) {
-        setLibraryMessages([
-            { level: "warning", message: `Ignored ${basename(found.filePath)}: ${found.error}` }
-        ]);
-        return;
-    }
-
-    state.pendingRuleSet = found.ruleSet;
-    state.pendingRuleFile = found.filePath;
+    const [only] = candidates;
+    state.pendingRuleSet = only.ruleSet;
+    state.pendingRuleFile = only.filePath;
 
     // The rules say nothing about where they came from, so what to tick is
     // decided by shape: the main process reports which series they fit.
-    const fitting = found.fittingSeries || [];
+    const fitting = only.fittingSeries;
     for (const uid of fitting) state.selectedSeries.add(uid);
     renderLibraryStage();
 
     setLibraryMessages([
+        ...messages,
         {
             level: "info",
             message: fitting.length
-                ? `Found ${basename(found.filePath)} - ${pluralize(fitting.length, "series", "series")} here ${fitting.length === 1 ? "matches" : "match"} these rules, pre-selected. They apply when you press Analyze Selected.`
-                : `Found ${basename(found.filePath)}, but no series here has the shape it needs. The rules still apply to whatever you analyze.`
+                ? `Found ${only.relativePath} - ${pluralize(fitting.length, "series", "series")} here ${fitting.length === 1 ? "matches" : "match"} these rules, pre-selected. They apply when you press Analyze Selected.`
+                : `Found ${only.relativePath}, but no series here has the shape it needs. The rules still apply to whatever you analyze.`
         }
     ]);
+}
+
+/** SeriesInstanceUID -> "4 MULTI RECON", for naming series in the picker. */
+function seriesLabels() {
+    const labels = new Map();
+    for (const study of state.library?.studies || []) {
+        for (const series of study.series) {
+            labels.set(series.seriesInstanceUID, `${series.seriesNumber ?? "-"} ${series.seriesDescription}`);
+        }
+    }
+    return labels;
 }
 
 /* ------------------------------------------------------------------ */
@@ -199,6 +233,18 @@ function applyDiscoveredRules(found) {
 async function analyzeSelected() {
     const uids = [...state.selectedSeries];
     if (!uids.length) return;
+
+    // Several rule sets in the folder means the choice is the user's. Asking
+    // here rather than at scan time means the summaries can be read against
+    // the selection they are about to be applied to.
+    if (state.ruleCandidates.length > 1) {
+        const chosen = await openRulePicker(state.ruleCandidates, seriesLabels());
+        if (chosen === undefined) return; // backed out; stay in the library
+
+        state.ruleCandidates = [];
+        state.pendingRuleSet = chosen ? chosen.ruleSet : null;
+        state.pendingRuleFile = chosen ? chosen.filePath : null;
+    }
 
     // A rule set found in the folder carries the phase ordering it was built
     // on; adopt it before the first analysis rather than re-detecting.
@@ -523,6 +569,7 @@ function init() {
     });
 
     initExportDialog();
+    initRulePicker();
 
     // Nothing on the page is a drop target, and the browser's default for a
     // dropped file is to navigate to it, so refuse drops outright.

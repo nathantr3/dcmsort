@@ -44,8 +44,8 @@ Commands:
 Options:
   --folder <dir>      Folder of DICOMs to read, searched recursively.
   --rules <file>      Rule set JSON saved from the app (apply only). Left out,
-                      apply uses a valid rule file found in --folder: one named
-                      rules.dcmsort.json, or a lone *.dcmsort.json.
+                      apply searches --folder and everything under it for a
+                      *.dcmsort.json, and uses it if exactly one is usable.
   --out <dir>         Write a new tree under <dir> (apply only).
   --in-place          Overwrite the source files (apply only). Destructive.
   --series <match>    Only touch series matching this SeriesNumber, a substring
@@ -428,36 +428,34 @@ async function applyToSeries(group, { ruleSet, target, flags, report }) {
  * The rules to apply: the file named with --rules, or one found in the folder
  * being processed - the same discovery the app does when a folder is opened.
  *
- * A file is only picked up automatically if it is genuinely usable: it has to
- * parse and to carry rules. Guessing at a file that turns out to be empty or
- * malformed would be worse than saying nothing was found.
+ * The folder is searched all the way down, since a rule file often sits beside
+ * the series it was built from. Only genuinely usable files count - one that
+ * will not parse or carries no rules is passed over, with the reason - and
+ * more than one is a choice only the user can make.
  */
 async function resolveRuleFile(flags, report) {
     if (flags.rules) return { filePath: flags.rules, ruleSet: await loadRuleFile(flags.rules) };
 
-    const found = await rules.findRuleFile(flags.folder);
-    if (!found) {
-        throw new Error(`No rule file in ${flags.folder}. Name one with --rules <file>.`);
-    }
-    if (found.ambiguous) {
+    const { usable, rejected } = await rules.collectRuleFiles(flags.folder);
+
+    if (usable.length > 1) {
+        const list = usable.map((c) => `  ${path.relative(flags.folder, c.filePath)}`).join("\n");
         throw new Error(
-            `${flags.folder} has several rule files (${found.ambiguous.join(", ")}) and none named ` +
-                `${rules.RULE_FILE_NAME}. Name the one you want with --rules <file>.`
+            `${flags.folder} holds ${usable.length} rule files:\n${list}\n` +
+                `Name the one you want with --rules <file>.`
         );
     }
 
-    // loadRuleFile reports a parse failure in terms of the file it read, which
-    // reads correctly whether the user named it or we found it.
-    const ruleSet = await loadRuleFile(found.filePath);
-    if (!ruleSet.childSeries.length) {
-        throw new Error(
-            `${found.filePath} has no child series, so there is nothing to apply. ` +
-                `Name a different file with --rules <file>.`
-        );
+    if (!usable.length) {
+        // Say why a file that looked like one was passed over, or the user is
+        // left wondering why their rules.dcmsort.json was ignored.
+        const why = rejected.map((r) => `\n  ${path.relative(flags.folder, r.filePath)}: ${r.reason}`).join("");
+        throw new Error(`No usable rule file in ${flags.folder}.${why}\nName one with --rules <file>.`);
     }
 
-    report.say(`Using ${path.basename(found.filePath)} found in ${flags.folder}`);
-    return { filePath: found.filePath, ruleSet };
+    const [found] = usable;
+    report.say(`Using ${path.relative(flags.folder, found.filePath)} found in ${flags.folder}`);
+    return found;
 }
 
 async function loadRuleFile(file) {

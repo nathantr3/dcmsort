@@ -41,6 +41,22 @@ function ruleFile(dir, overrides = {}) {
     return file;
 }
 
+/**
+ * A scratch copy of the fixtures holding images and nothing else.
+ *
+ * Discovery walks the whole tree, so anything else lying about in the fixture
+ * folder - an OS dropping, a rule file left over from a manual run - would
+ * otherwise decide the outcome of these tests.
+ */
+function copyFixtures() {
+    const dest = fs.mkdtempSync(path.join(os.tmpdir(), "dcmsort-found-"));
+    fs.cpSync(FIXTURES, dest, {
+        recursive: true,
+        filter: (src) => !src.endsWith(".DS_Store") && !src.endsWith(".dcmsort.json")
+    });
+    return dest;
+}
+
 /** Run the CLI as a real process, so exit codes are the ones a shell sees. */
 async function cliRun(args) {
     try {
@@ -215,8 +231,7 @@ describe("apply end to end", () => {
     });
 
     it("finds the rule file in the folder when --rules is left out", async () => {
-        const folder = fs.mkdtempSync(path.join(os.tmpdir(), "dcmsort-found-"));
-        fs.cpSync(FIXTURES, folder, { recursive: true, filter: (src) => !src.endsWith(".DS_Store") });
+        const folder = copyFixtures();
         ruleFile(folder); // writes rules.dcmsort.json into the folder being applied to
 
         const { code, stdout } = await cliRun([
@@ -232,8 +247,7 @@ describe("apply end to end", () => {
     });
 
     it("takes a lone rule file whatever it is called, but not one of several", async () => {
-        const folder = fs.mkdtempSync(path.join(os.tmpdir(), "dcmsort-found-"));
-        fs.cpSync(FIXTURES, folder, { recursive: true, filter: (src) => !src.endsWith(".DS_Store") });
+        const folder = copyFixtures();
         fs.renameSync(ruleFile(folder), path.join(folder, "cardiac.dcmsort.json"));
 
         const args = ["apply", "--folder", folder, "--out", path.join(folder, "out"), "--dry-run"];
@@ -244,27 +258,30 @@ describe("apply end to end", () => {
         fs.copyFileSync(path.join(folder, "cardiac.dcmsort.json"), path.join(folder, "other.dcmsort.json"));
         const several = await cliRun(args);
         expect(several.code).toBe(1);
-        expect(several.stderr).toMatch(/several rule files .* Name the one you want/);
+        expect(several.stderr).toMatch(/holds 2 rule files/);
+        expect(several.stderr).toMatch(/Name the one you want with --rules/);
     });
 
     it("refuses to pick up a rule file that is not usable", async () => {
-        const folder = fs.mkdtempSync(path.join(os.tmpdir(), "dcmsort-found-"));
-        fs.cpSync(FIXTURES, folder, { recursive: true, filter: (src) => !src.endsWith(".DS_Store") });
+        const folder = copyFixtures();
         const args = ["apply", "--folder", folder, "--out", path.join(folder, "out"), "--dry-run"];
 
         const none = await cliRun(args);
         expect(none.code).toBe(1);
-        expect(none.stderr).toMatch(/No rule file in .* Name one with --rules/);
+        expect(none.stderr).toMatch(/No usable rule file in/);
 
+        // A file that looked like rules but could not be used says so by name,
+        // rather than being silently passed over.
         fs.writeFileSync(path.join(folder, "rules.dcmsort.json"), '{ "version": 1, ');
         const broken = await cliRun(args);
         expect(broken.code).toBe(1);
-        expect(broken.stderr).toContain("is not a valid rule file");
+        expect(broken.stderr).toMatch(/No usable rule file/);
+        expect(broken.stderr).toMatch(/rules\.dcmsort\.json: .*JSON/);
 
         fs.writeFileSync(path.join(folder, "rules.dcmsort.json"), '{ "version": 1, "childSeries": [] }');
         const empty = await cliRun(args);
         expect(empty.code).toBe(1);
-        expect(empty.stderr).toContain("has no child series");
+        expect(empty.stderr).toMatch(/rules\.dcmsort\.json: it contains no child series/);
     });
 
     it("fails on a missing rule file and on a folder that is not one", async () => {

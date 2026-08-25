@@ -97,23 +97,27 @@ function planForRenderer(plan) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Look for a rule set living alongside the DICOMs, so re-opening a folder does
- * not mean re-finding its rules by hand. A rule file that will not parse is
- * reported and skipped: it must never take the scan down with it.
+ * Look for rule sets living with the DICOMs, so re-opening a folder does not
+ * mean re-finding its rules by hand. Anything unreadable is reported and
+ * skipped: a bad rule file must never take the scan down with it.
  *
- * @returns {Promise<{filePath: string, ruleSet: object, fittingSeries: string[]} | {filePath: string, error: string} | {ambiguous: string[]} | null>}
+ * Where several usable rule sets turn up, all of them come back - the renderer
+ * asks which one to use rather than choosing on the user's behalf.
  */
-async function discoverRuleSet(root, records) {
-    const found = await rules.findRuleFile(root);
-    if (!found || !found.filePath) return found;
+async function discoverRuleSets(root, records) {
+    const { usable, rejected } = await rules.collectRuleFiles(root);
+    if (!usable.length && !rejected.length) return null;
 
-    try {
-        const raw = JSON.parse(await fsp.readFile(found.filePath, "utf8"));
-        const ruleSet = rules.normalizeRuleSet(raw);
-        return { filePath: found.filePath, ruleSet, fittingSeries: seriesFitting(ruleSet, records) };
-    } catch (err) {
-        return { filePath: found.filePath, error: err.message };
-    }
+    return {
+        candidates: usable.map(({ filePath, ruleSet }) => ({
+            filePath,
+            relativePath: path.relative(root, filePath) || path.basename(filePath),
+            ruleSet,
+            summary: rules.summarizeRuleSet(ruleSet),
+            fittingSeries: seriesFitting(ruleSet, records)
+        })),
+        rejected: rejected.map((r) => ({ ...r, relativePath: path.relative(root, r.filePath) }))
+    };
 }
 
 /**
@@ -166,7 +170,7 @@ function register() {
             library: buildLibrary(records),
             stats,
             errors: errors.slice(0, 100),
-            ruleFile: await discoverRuleSet(root, records)
+            ruleFiles: await discoverRuleSets(root, records)
         };
     });
 

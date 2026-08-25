@@ -459,6 +459,72 @@ label.radio em {
     overflow-y: auto;
 }
 
+.rule-picker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 16px;
+    max-height: 52vh;
+    overflow-y: auto;
+}
+
+.rule-option {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    cursor: pointer;
+}
+
+.rule-option:hover {
+    border-color: var(--border-strong);
+}
+
+.rule-option:has(input:checked) {
+    border-color: var(--accent);
+    background: rgb(255 255 255 / 0.03);
+}
+
+.rule-option-body {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.rule-option-title {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    flex-wrap: wrap;
+}
+
+.rule-option-title strong {
+    color: var(--text-bright);
+    font-size: 12px;
+}
+
+.rule-option-line {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.5;
+}
+
+.rule-option-line.ok {
+    color: var(--ok);
+}
+
+.rule-option-line.warn {
+    color: var(--warn);
+}
+
+.rule-option-arrow {
+    color: var(--text-dim);
+    margin-right: 4px;
+}
+
 .dialog-actions {
     display: flex;
     justify-content: flex-end;

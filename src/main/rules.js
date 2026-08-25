@@ -18,35 +18,74 @@
 const fsp = require("fs/promises");
 const path = require("path");
 
+const { SKIP_DIRS } = require("./scanner");
+
 const RULESET_VERSION = 1;
 
 /**
- * A rule set usually belongs to one folder of DICOMs, so we look for one there
- * on every scan. `rules.dcmsort.json` is what the save dialog offers, and it
- * wins outright; otherwise a lone `*.dcmsort.json` is unambiguous enough to
- * take. Several of those and no default name is a choice we cannot make for
- * the user.
+ * A rule set usually belongs with a folder of DICOMs, so we look for one there
+ * on every scan - anywhere in the tree, since a rule file often sits beside the
+ * series it was built from rather than at the top.
+ *
+ * Where more than one turns up there is no safe default: which rules to apply
+ * is the user's call, so both callers ask rather than guess.
  */
 const RULE_FILE_NAME = "rules.dcmsort.json";
 const RULE_FILE_SUFFIX = ".dcmsort.json";
 
 /**
- * @param {string} root folder to look in, top level only
- * @returns {Promise<{filePath: string} | {ambiguous: string[]} | null>}
+ * Every `*.dcmsort.json` under a folder, recursively, following no symlinks.
+ *
+ * @param {string} root
+ * @returns {Promise<string[]>} absolute paths, in a stable order
  */
-async function findRuleFile(root) {
-    let entries;
-    try {
-        entries = await fsp.readdir(root, { withFileTypes: true });
-    } catch {
-        return null;
+async function findRuleFiles(root) {
+    const found = [];
+
+    async function walk(dir) {
+        const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+
+        for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                if (!SKIP_DIRS.has(entry.name)) await walk(full);
+            } else if (entry.isFile() && entry.name.endsWith(RULE_FILE_SUFFIX)) {
+                found.push(full);
+            }
+        }
     }
 
-    const names = entries.filter((e) => e.isFile() && e.name.endsWith(RULE_FILE_SUFFIX)).map((e) => e.name);
-    if (names.includes(RULE_FILE_NAME)) return { filePath: path.join(root, RULE_FILE_NAME) };
-    if (names.length === 1) return { filePath: path.join(root, names[0]) };
-    if (names.length > 1) return { ambiguous: names.sort() };
-    return null;
+    await walk(root);
+    return found.sort();
+}
+
+/**
+ * Find the rule files under a folder and sort them into the ones that can
+ * actually be applied and the ones that cannot.
+ *
+ * A file has to parse and to carry rules to count: offering the user a choice
+ * that turns out to be empty or malformed is worse than not offering it.
+ *
+ * @returns {Promise<{usable: {filePath: string, ruleSet: object}[], rejected: {filePath: string, reason: string}[]}>}
+ */
+async function collectRuleFiles(root) {
+    const usable = [];
+    const rejected = [];
+
+    for (const filePath of await findRuleFiles(root)) {
+        let ruleSet;
+        try {
+            ruleSet = normalizeRuleSet(JSON.parse(await fsp.readFile(filePath, "utf8")));
+        } catch (err) {
+            rejected.push({ filePath, reason: err.message });
+            continue;
+        }
+
+        if (!ruleSet.childSeries.length) rejected.push({ filePath, reason: "it contains no child series" });
+        else usable.push({ filePath, ruleSet });
+    }
+
+    return { usable, rejected };
 }
 
 /**
@@ -439,6 +478,75 @@ function computeDescription(attributes, originalDescription) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Summaries                                                           */
+/* ------------------------------------------------------------------ */
+
+function describeAxisNeed(axis, need) {
+    if (!need) return null;
+    if (Number.isFinite(need.exact)) return `exactly ${need.exact} ${axis}`;
+    if (Number.isFinite(need.min)) return `at least ${need.min} ${axis}`;
+    return null;
+}
+
+/** "100 x base + 1", or "301" when the number is set outright. */
+function describeSeriesNumber(attributes) {
+    if (attributes.seriesNumberMode === "absolute") {
+        const n = Number(attributes.seriesNumberAbsolute);
+        return Number.isFinite(n) ? `number ${n}` : null;
+    }
+
+    const scale = Number(attributes.seriesScale);
+    const offset = Number(attributes.seriesOffset);
+    const parts = [];
+    if (Number.isFinite(scale) && scale !== 1) parts.push(`${scale} x base`);
+    else parts.push("base");
+    if (Number.isFinite(offset) && offset) parts.push(offset > 0 ? `+ ${offset}` : `- ${Math.abs(offset)}`);
+    return `number ${parts.join(" ")}`;
+}
+
+/** What happens to the series description, in as few words as carry it. */
+function describeDescriptionChange(attributes) {
+    const parts = [];
+    if (attributes.descriptionStripPrefix) parts.push(`strip "${attributes.descriptionStripPrefix}"`);
+    if (attributes.descriptionMode === "replace") {
+        parts.push(`replaced with "${attributes.descriptionNew || ""}"`);
+    } else if (attributes.descriptionNew) {
+        parts.push(`labelled "${attributes.descriptionNew}"`);
+    }
+    if (attributes.descriptionPrefix) parts.push(`prefix "${attributes.descriptionPrefix}"`);
+    if (attributes.descriptionSuffix) parts.push(`suffix "${attributes.descriptionSuffix}"`);
+    return parts.length ? parts.join(", ") : "description unchanged";
+}
+
+/**
+ * A short account of what a rule set needs and what it produces, so several of
+ * them can be told apart at a glance. Presentation is left to the caller; this
+ * only knows the formulas.
+ */
+function summarizeRuleSet(ruleSet) {
+    const requirements = ruleSet?.requirements;
+
+    const volumes = Object.entries(requirements?.volumes || {})
+        .map(([id, needs]) => ({
+            id,
+            needs: [describeAxisNeed("slices", needs.slices), describeAxisNeed("phases", needs.phases)].filter(Boolean)
+        }))
+        .filter((v) => v.needs.length);
+
+    return {
+        requires: requirements ? { volumeCount: requirements.volumeCount ?? null, volumes } : null,
+        childSeries: (ruleSet?.childSeries || []).map((cs) => ({
+            label: cs.label,
+            selections: (cs.selections || []).map(
+                (sel) => `${sel.volumeId} · slices ${sel.slices} · phases ${sel.phases}`
+            ),
+            seriesNumber: describeSeriesNumber(cs.attributes || {}),
+            description: describeDescriptionChange(cs.attributes || {})
+        }))
+    };
+}
+
+/* ------------------------------------------------------------------ */
 /* Resolution                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -594,7 +702,8 @@ module.exports = {
     RULESET_VERSION,
     RULE_FILE_NAME,
     RULE_FILE_SUFFIX,
-    findRuleFile,
+    findRuleFiles,
+    collectRuleFiles,
     PALETTE,
     paletteColor,
     parseRange,
@@ -605,6 +714,7 @@ module.exports = {
     normalizeRuleSet,
     axisRequirement,
     describeRequirements,
+    summarizeRuleSet,
     checkRuleSetFit,
     computeSeriesNumber,
     computeDescription,

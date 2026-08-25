@@ -183,12 +183,17 @@ dcmsort list    --folder /data/patient42      # exams, series, UIDs
 dcmsort analyze --folder /data/patient42      # detected volumes, slices x phases
 ```
 
-`--rules` is optional. Left out, `apply` uses a rule file sitting in the folder
-it is processing - one named `rules.dcmsort.json`, or a lone `*.dcmsort.json` -
-which is the same discovery the app does when you open a folder. It only picks
-one up if it is genuinely usable: a file that will not parse, or that carries no
-rules, is reported rather than guessed around, as are several candidates with no
-clear default.
+`--rules` is optional. Left out, `apply` searches the folder **and everything
+under it** for a `*.dcmsort.json` - rule files usually sit beside the series
+they were built from - and uses it if exactly one is usable. A file that will
+not parse, or that carries no rules, is passed over with the reason given. More
+than one and it stops and asks for `--rules`, since which rules to apply is not
+something to guess at.
+
+The app does the same search when you open a folder. One usable rule set is
+adopted and the series it fits are ticked; several, and it asks which to use
+when you press Analyze, showing what each one needs, what it produces, and
+which of the series in front of you it matches.
 
 `apply` takes **each series in the folder on its own**: it analyzes that series
 alone - so its volumes always start at `v1` - and offers the rule set to it. A

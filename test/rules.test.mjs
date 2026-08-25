@@ -20,7 +20,9 @@ const {
     computeSeriesNumber,
     computeDescription,
     stripPrefix,
-    findRuleFile,
+    findRuleFiles,
+    collectRuleFiles,
+    summarizeRuleSet,
     defaultAttributes,
     resolveRuleSet,
     emptyRuleSet
@@ -438,33 +440,104 @@ describe("rule set portability", () => {
     });
 });
 
-describe("findRuleFile", () => {
-    function tempDir(names) {
+describe("rule file discovery", () => {
+    function tempTree(files) {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dcmsort-rules-"));
-        for (const name of names) fs.writeFileSync(path.join(dir, name), "{}\n");
+        for (const [name, body] of Object.entries(files)) {
+            const full = path.join(dir, name);
+            fs.mkdirSync(path.dirname(full), { recursive: true });
+            fs.writeFileSync(full, body);
+        }
         return dir;
     }
 
+    const RULES = JSON.stringify({
+        childSeries: [{ id: "cs-1", selections: [{ volumeId: "v1", slices: "*", phases: "*" }] }]
+    });
+
     it("finds nothing in a folder without rule files", async () => {
-        expect(await findRuleFile(tempDir(["notes.txt", "IM-0001.dcm"]))).toBeNull();
+        expect(await findRuleFiles(tempTree({ "notes.txt": "", "IM-0001.dcm": "" }))).toEqual([]);
     });
 
     it("finds nothing in a folder that does not exist", async () => {
-        expect(await findRuleFile(path.join(os.tmpdir(), "dcmsort-does-not-exist"))).toBeNull();
+        expect(await findRuleFiles(path.join(os.tmpdir(), "dcmsort-does-not-exist"))).toEqual([]);
     });
 
-    it("prefers the default name over other rule files", async () => {
-        const dir = tempDir(["zzz.dcmsort.json", "rules.dcmsort.json"]);
-        expect(await findRuleFile(dir)).toEqual({ filePath: path.join(dir, "rules.dcmsort.json") });
+    it("searches subdirectories, not just the folder it was given", async () => {
+        // A rule file usually sits beside the series it was built from.
+        const dir = tempTree({ "studyA/series4/rules.dcmsort.json": RULES });
+        expect(await findRuleFiles(dir)).toEqual([path.join(dir, "studyA/series4/rules.dcmsort.json")]);
     });
 
-    it("takes a lone rule file whatever it is called", async () => {
-        const dir = tempDir(["cardiac.dcmsort.json", "unrelated.json"]);
-        expect(await findRuleFile(dir)).toEqual({ filePath: path.join(dir, "cardiac.dcmsort.json") });
+    it("returns every rule file it finds, in a stable order", async () => {
+        const dir = tempTree({
+            "b/second.dcmsort.json": RULES,
+            "a/first.dcmsort.json": RULES,
+            "unrelated.json": "{}"
+        });
+        expect(await findRuleFiles(dir)).toEqual([
+            path.join(dir, "a/first.dcmsort.json"),
+            path.join(dir, "b/second.dcmsort.json")
+        ]);
     });
 
-    it("refuses to choose between several rule files", async () => {
-        const dir = tempDir(["b.dcmsort.json", "a.dcmsort.json"]);
-        expect(await findRuleFile(dir)).toEqual({ ambiguous: ["a.dcmsort.json", "b.dcmsort.json"] });
+    it("skips directories that never hold study data", async () => {
+        const dir = tempTree({ "node_modules/pkg/rules.dcmsort.json": RULES });
+        expect(await findRuleFiles(dir)).toEqual([]);
+    });
+
+    it("sorts the usable rule files from the ones that cannot be applied", async () => {
+        const dir = tempTree({
+            "good.dcmsort.json": RULES,
+            "broken.dcmsort.json": '{ "version": 1, ',
+            "empty.dcmsort.json": '{ "childSeries": [] }'
+        });
+        const { usable, rejected } = await collectRuleFiles(dir);
+
+        expect(usable.map((u) => path.basename(u.filePath))).toEqual(["good.dcmsort.json"]);
+        expect(usable[0].ruleSet.childSeries).toHaveLength(1);
+        expect(rejected.map((r) => path.basename(r.filePath)).sort()).toEqual([
+            "broken.dcmsort.json",
+            "empty.dcmsort.json"
+        ]);
+        expect(rejected.find((r) => r.filePath.endsWith("empty.dcmsort.json")).reason).toMatch(/no child series/);
+    });
+});
+
+describe("summarizeRuleSet", () => {
+    it("says what the rules need and what they produce", () => {
+        const summary = summarizeRuleSet({
+            requirements: { volumeCount: 3, volumes: { v1: { phases: { exact: 4 } } } },
+            childSeries: [
+                {
+                    label: "Late phases",
+                    selections: [{ volumeId: "v1", slices: "*", phases: "3-4" }],
+                    attributes: { ...defaultAttributes(), seriesScale: 100, seriesOffset: 2, descriptionPrefix: "LATE:" }
+                }
+            ]
+        });
+
+        expect(summary.requires).toEqual({ volumeCount: 3, volumes: [{ id: "v1", needs: ["exactly 4 phases"] }] });
+        expect(summary.childSeries[0]).toMatchObject({
+            label: "Late phases",
+            selections: ["v1 · slices * · phases 3-4"],
+            seriesNumber: "number 100 x base + 2",
+            description: 'prefix "LATE:"'
+        });
+    });
+
+    it("reports an absolute series number and an untouched description plainly", () => {
+        const summary = summarizeRuleSet({
+            childSeries: [
+                {
+                    label: "A",
+                    selections: [],
+                    attributes: { ...defaultAttributes(), seriesNumberMode: "absolute", seriesNumberAbsolute: 301 }
+                }
+            ]
+        });
+        expect(summary.requires).toBeNull();
+        expect(summary.childSeries[0].seriesNumber).toBe("number 301");
+        expect(summary.childSeries[0].description).toBe("description unchanged");
     });
 });
