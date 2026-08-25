@@ -284,6 +284,67 @@ describe("apply end to end", () => {
         expect(empty.stderr).toMatch(/rules\.dcmsort\.json: it contains no child series/);
     });
 
+    it("merges the folder into one series when the rule set says so", async () => {
+        const folder = copyFixtures();
+        // Keep only MULTI RECON, whose three volumes are what the rules need.
+        for (const study of fs.readdirSync(folder)) {
+            const studyDir = path.join(folder, study);
+            if (!fs.statSync(studyDir).isDirectory()) continue;
+            for (const series of fs.readdirSync(studyDir)) {
+                if (series !== "series4") fs.rmSync(path.join(studyDir, series), { recursive: true, force: true });
+            }
+        }
+
+        const rules = ruleFile(folder, {
+            mode: "merge",
+            childSeries: [
+                { id: "cs-1", label: "First", selections: [{ volumeId: "v2", slices: "*", phases: "*" }],
+                  attributes: { descriptionPrefix: "JOINED:", seriesScale: 100, seriesOffset: 1 } },
+                { id: "cs-2", label: "Second", selections: [{ volumeId: "v3", slices: "*", phases: "*" }],
+                  attributes: { descriptionPrefix: "JOINED:", seriesScale: 100, seriesOffset: 1 } }
+            ]
+        });
+
+        const out = path.join(folder, "out");
+        const { code, stdout } = await cliRun(["apply", "--rules", rules, "--folder", folder, "--out", out, "--json"]);
+        expect(code).toBe(0);
+
+        const summary = JSON.parse(stdout);
+        expect(summary.mode).toBe("merge");
+        expect(summary.segments.map((s) => [s.instanceStart, s.instanceEnd])).toEqual([[1, 16], [17, 24]]);
+
+        // v2 is 8x2 and v3 is 8x1: one series of 24 images, numbered straight
+        // through in segment order.
+        const written = fs.readdirSync(out, { recursive: true }).filter((f) => String(f).endsWith(".dcm"));
+        expect(written).toHaveLength(24);
+
+        const records = await Promise.all(written.map((f) => readRecord(path.join(out, String(f)))));
+        expect(new Set(records.map((r) => r.seriesInstanceUID)).size).toBe(1);
+        expect(records[0].seriesDescription).toBe("JOINED: MULTI RECON");
+        expect(records.map((r) => r.instanceNumber).sort((a, b) => a - b)).toEqual(
+            Array.from({ length: 24 }, (_, i) => i + 1)
+        );
+    });
+
+    it("aborts a merge whose shape the folder does not have", async () => {
+        const folder = copyFixtures();
+        const rules = ruleFile(folder, {
+            mode: "merge",
+            requirements: { volumeCount: 99, volumes: {} },
+            childSeries: [
+                { id: "cs-1", label: "First", selections: [{ volumeId: "v1", slices: "*", phases: "*" }] }
+            ]
+        });
+
+        const { code, stderr } = await cliRun([
+            "apply", "--rules", rules, "--folder", folder, "--out", path.join(folder, "out"), "--dry-run"
+        ]);
+        // Nothing else to fall back to, so a mismatch is a failure, not a skip.
+        expect(code).toBe(1);
+        expect(stderr).toMatch(/built on 99 volumes/);
+        expect(stderr).toMatch(/narrow it with --series/);
+    });
+
     it("fails on a missing rule file and on a folder that is not one", async () => {
         const missing = await cliRun([
             "apply", "--rules", path.join(tmp, "nope.json"), "--folder", FIXTURES, "--out", tmp

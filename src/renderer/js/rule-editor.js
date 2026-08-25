@@ -73,7 +73,7 @@ function selectionRow({ selection, index, childId, volumes, resolvedCount, actio
     return row;
 }
 
-function childCard({ child, volumes, actions }) {
+function childCard({ child, volumes, actions, merging, index, total }) {
     const preview = el("span", { class: "child-preview" });
 
     const head = el(
@@ -93,7 +93,9 @@ function childCard({ child, volumes, actions }) {
                 class: "child-label-input",
                 type: "text",
                 value: child.label,
-                title: "Name for this child series (used in the UI only)",
+                title: merging
+                ? "Name for this segment (used in the UI only)"
+                : "Name for this child series (used in the UI only)",
                 on: {
                     input: debounce((e) => actions.updateChild(child.id, { label: e.target.value }), 250),
                     focus: () => actions.focusChild(child.id)
@@ -101,6 +103,24 @@ function childCard({ child, volumes, actions }) {
             }),
             preview,
             el("span", { class: "spacer" }),
+            merging
+                ? el("button", {
+                      class: "ghost small",
+                      text: "\u2191",
+                      title: "Move earlier in the merged series",
+                      disabled: index === 0,
+                      on: { click: () => actions.moveChild(child.id, -1) }
+                  })
+                : null,
+            merging
+                ? el("button", {
+                      class: "ghost small",
+                      text: "\u2193",
+                      title: "Move later in the merged series",
+                      disabled: index === total - 1,
+                      on: { click: () => actions.moveChild(child.id, 1) }
+                  })
+                : null,
             el("button", {
                 class: "ghost small",
                 text: "Duplicate",
@@ -159,17 +179,37 @@ function childCard({ child, volumes, actions }) {
  * re-rendered the panel and took the field away mid-click.
  */
 function structureKey(ruleSet) {
-    return ruleSet.childSeries
-        .map((cs) => `${cs.id}:${cs.selections.length}:${cs.color}`)
-        .join("|");
+    // The mode changes what a card shows and the order decides the reorder
+    // buttons, so both have to force a rebuild.
+    return [
+        ruleSet.mode,
+        ruleSet.childSeries.map((cs) => `${cs.id}:${cs.selections.length}:${cs.color}`).join("|")
+    ].join("//");
 }
 
 let cards = new Map();
 let lastKey = null;
+let mergedLine = null;
 
 /** Update only what the rules resolved to; never touch a user-editable field. */
 function patch(preview, ruleSet, focusedChildId) {
-    const resolvedById = new Map((preview?.childSeries || []).map((cs) => [cs.id, cs]));
+    // Segments are the per-card unit in both modes: splitting they are the
+    // output series themselves, merging they are the parts of the one output.
+    const resolvedById = new Map((preview?.segments || []).map((cs) => [cs.id, cs]));
+    const merging = ruleSet.mode === "merge";
+
+    if (mergedLine) {
+        const merged = preview?.childSeries?.[0];
+        clear(mergedLine);
+        if (merged) {
+            mergedLine.append(
+                document.createTextNode("Merges into "),
+                el("strong", { text: String(merged.seriesNumber ?? "-") }),
+                document.createTextNode(`  ${merged.seriesDescription || ""}  -  `),
+                document.createTextNode(pluralize(merged.fileCount, "file"))
+            );
+        }
+    }
 
     for (const child of ruleSet.childSeries) {
         const card = cards.get(child.id);
@@ -179,7 +219,14 @@ function patch(preview, ruleSet, focusedChildId) {
         card.classList.toggle("focused", child.id === focusedChildId);
 
         clear(card._preview);
-        if (resolved && resolved.fileCount) {
+        if (resolved && resolved.fileCount && merging) {
+            // A segment has no number or description of its own; where it
+            // lands in the merged series is the useful fact.
+            card._preview.append(
+                document.createTextNode(`${pluralize(resolved.fileCount, "file")}  -  instances `),
+                el("strong", { text: `${resolved.instanceStart}-${resolved.instanceEnd}` })
+            );
+        } else if (resolved && resolved.fileCount) {
             card._preview.append(
                 el("strong", { text: String(resolved.seriesNumber ?? "-") }),
                 document.createTextNode(`  ${resolved.seriesDescription || ""}  -  `),
@@ -226,11 +273,22 @@ export function renderRuleEditor(container, { ruleSet, preview, volumes, focused
         return;
     }
 
-    for (const child of ruleSet.childSeries) {
-        const card = childCard({ child, volumes, actions });
+    const merging = ruleSet.mode === "merge";
+    mergedLine = merging ? el("div", { class: "merged-line" }) : null;
+    if (mergedLine) container.append(mergedLine);
+
+    ruleSet.childSeries.forEach((child, index) => {
+        const card = childCard({
+            child,
+            volumes,
+            actions,
+            merging,
+            index,
+            total: ruleSet.childSeries.length
+        });
         cards.set(child.id, card);
         container.append(card);
-    }
+    });
     patch(preview, ruleSet, focusedChildId);
 }
 
@@ -238,4 +296,5 @@ export function renderRuleEditor(container, { ruleSet, preview, volumes, focused
 export function resetRuleEditor() {
     cards = new Map();
     lastKey = null;
+    mergedLine = null;
 }

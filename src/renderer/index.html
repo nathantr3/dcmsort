@@ -84,7 +84,12 @@
 
                     <section class="panel panel-grow">
                         <div class="pane-header">
-                            <span>Child series</span>
+                            <span id="rules-panel-title">Child series</span>
+                            <label class="checkbox small" title="Combine the series below into a single output series, in the order listed">
+                                <input type="checkbox" id="chk-merge-mode" />
+                                <span>Merge into one series</span>
+                            </label>
+                            <span class="spacer"></span>
                             <button id="btn-add-child" class="ghost small">+ Add child series</button>
                         </div>
                         <div id="rule-editor" class="rule-editor"></div>

@@ -15,11 +15,37 @@ function formatDate(dicomDate) {
     return `${dicomDate.slice(0, 4)}-${dicomDate.slice(4, 6)}-${dicomDate.slice(6, 8)}`;
 }
 
-/** Sort helper that puts numbered items in numeric order, unnumbered last. */
-function bySeriesNumber(a, b) {
-    const an = Number.isFinite(a.seriesNumber) ? a.seriesNumber : Infinity;
-    const bn = Number.isFinite(b.seriesNumber) ? b.seriesNumber : Infinity;
-    return an - bn || String(a.seriesDescription).localeCompare(String(b.seriesDescription));
+/**
+ * A total order over series, so volume ids mean the same thing on every run.
+ *
+ * Rules bind to volumes positionally, and volumes are numbered by walking the
+ * selected series in order - so any two series that could tie here would make
+ * a saved rule set select different images from one run to the next. The last
+ * rung settles it outright: the first file path is unique to a series even
+ * when its number, exam and timestamps are identical to another's.
+ */
+function seriesSortKey(sample, firstFilePath) {
+    return {
+        seriesNumber: Number.isFinite(sample.seriesNumber) ? sample.seriesNumber : Infinity,
+        accessionNumber: sample.accessionNumber || "",
+        studyInstanceUID: sample.studyInstanceUID || "",
+        when: `${sample.studyDate || ""}${sample.studyTime || ""}`,
+        firstFilePath: firstFilePath || ""
+    };
+}
+
+function compareSeries(a, b) {
+    // Subtracting would give NaN for two unnumbered series, which sorts as 0
+    // only by accident; be explicit.
+    const byNumber = a.seriesNumber === b.seriesNumber ? 0 : a.seriesNumber - b.seriesNumber;
+
+    return (
+        byNumber ||
+        a.accessionNumber.localeCompare(b.accessionNumber) ||
+        a.studyInstanceUID.localeCompare(b.studyInstanceUID) ||
+        a.when.localeCompare(b.when) ||
+        a.firstFilePath.localeCompare(b.firstFilePath)
+    );
 }
 
 /**
@@ -53,20 +79,24 @@ function buildLibrary(records) {
                 seriesDescription: r.seriesDescription || "(no description)",
                 modality: r.modality || "",
                 fileCount: 0,
-                directories: new Set()
+                directories: new Set(),
+                sortKey: seriesSortKey(r, r.filePath)
             });
         }
         const series = study.series.get(seriesKey);
         series.fileCount++;
         series.directories.add(path.dirname(r.filePath));
+        // Records usually arrive path-sorted, but do not depend on it.
+        if (r.filePath < series.sortKey.firstFilePath) series.sortKey.firstFilePath = r.filePath;
     }
 
     const out = [...studies.values()]
         .map((s) => ({
             ...s,
             series: [...s.series.values()]
-                .map((se) => ({ ...se, directories: [...se.directories] }))
-                .sort(bySeriesNumber)
+                .sort((a, b) => compareSeries(a.sortKey, b.sortKey))
+                // The sort key is internal; the renderer never sees it.
+                .map(({ sortKey, ...se }) => ({ ...se, directories: [...se.directories] }))
         }))
         .sort(
             (a, b) =>
@@ -100,11 +130,17 @@ function groupBySeries(records) {
 
     for (const record of records) {
         const uid = record.seriesInstanceUID;
-        if (!groups.has(uid)) groups.set(uid, { seriesInstanceUID: uid, records: [] });
-        groups.get(uid).records.push(record);
+        if (!groups.has(uid)) {
+            groups.set(uid, { seriesInstanceUID: uid, records: [], sortKey: seriesSortKey(record, record.filePath) });
+        }
+        const group = groups.get(uid);
+        group.records.push(record);
+        if (record.filePath < group.sortKey.firstFilePath) group.sortKey.firstFilePath = record.filePath;
     }
 
-    return [...groups.values()].sort((a, b) => bySeriesNumber(a.records[0], b.records[0]));
+    return [...groups.values()]
+        .sort((a, b) => compareSeries(a.sortKey, b.sortKey))
+        .map(({ sortKey, ...group }) => group);
 }
 
-module.exports = { buildLibrary, groupBySeries, formatDate };
+module.exports = { buildLibrary, groupBySeries, seriesSortKey, compareSeries, formatDate };

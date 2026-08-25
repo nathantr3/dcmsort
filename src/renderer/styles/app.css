@@ -459,6 +459,27 @@ label.radio em {
     overflow-y: auto;
 }
 
+.attr-merge-note {
+    color: var(--warn);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 8px;
+    margin-bottom: 10px;
+    line-height: 1.5;
+}
+
+.merged-line {
+    font-size: 12px;
+    color: var(--text-dim);
+    border-left: 2px solid var(--border-strong);
+    padding: 4px 0 4px 10px;
+    margin-bottom: 10px;
+}
+
+.merged-line strong {
+    color: var(--text-bright);
+}
+
 .rule-picker-list {
     display: flex;
     flex-direction: column;

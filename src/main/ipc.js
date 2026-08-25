@@ -68,6 +68,20 @@ function volumeForRenderer(v) {
 
 function planForRenderer(plan) {
     return {
+        mode: plan.mode,
+        // What each segment contributed. In split mode these are the output
+        // series themselves; merging, they are the parts of the one output.
+        segments: plan.segments.map((seg) => ({
+            id: seg.id,
+            label: seg.label,
+            color: seg.color,
+            fileCount: seg.fileCount,
+            selectionCounts: seg.selectionCounts,
+            seriesNumber: seg.seriesNumber,
+            seriesDescription: seg.seriesDescription,
+            instanceStart: seg.instanceStart ?? null,
+            instanceEnd: seg.instanceEnd ?? null
+        })),
         childSeries: plan.childSeries.map((cs) => ({
             id: cs.id,
             label: cs.label,
@@ -129,9 +143,18 @@ async function discoverRuleSets(root, records) {
  * records already read and happens once per scan.
  */
 function seriesFitting(ruleSet, records) {
-    const fitting = [];
+    const groups = groupBySeries(records);
 
-    for (const group of groupBySeries(records)) {
+    // A merge takes every series at once, so asking which one it fits is the
+    // wrong question - it either fits the folder as a whole or it does not.
+    if (ruleSet.mode === "merge") {
+        const analysis = analyzeSelection(groups, { phaseKeyOverrides: ruleSet.phaseKeyOverrides });
+        if (rules.checkRuleSetFit(ruleSet, analysis).length) return [];
+        return groups.map((g) => g.seriesInstanceUID);
+    }
+
+    const fitting = [];
+    for (const group of groups) {
         const analysis = analyzeSelection([group], { phaseKeyOverrides: ruleSet.phaseKeyOverrides });
         if (!rules.checkRuleSetFit(ruleSet, analysis).length) fitting.push(group.seriesInstanceUID);
     }
@@ -181,14 +204,12 @@ function register() {
 
     ipcMain.handle("analyze:selection", async (_event, { seriesInstanceUIDs, phaseKeyOverrides }) => {
         const wanted = new Set(seriesInstanceUIDs);
-        const groups = [];
 
-        // Preserve the order the user selected series in, so volume numbering
-        // follows the tree rather than scan order.
-        for (const uid of seriesInstanceUIDs) {
-            const records = state.records.filter((r) => r.seriesInstanceUID === uid);
-            if (records.length) groups.push({ seriesInstanceUID: uid, records });
-        }
+        // Volume ids are positional, so the order the series go in decides what
+        // a saved rule set will select later. It has to be a property of the
+        // data, not of the order the user happened to click - groupBySeries
+        // puts them in the one canonical order the CLI uses too.
+        const groups = groupBySeries(state.records.filter((r) => wanted.has(r.seriesInstanceUID)));
 
         const analysis = analyzeSelection(groups, { phaseKeyOverrides: phaseKeyOverrides || {} });
         state.analysis = analysis;

@@ -7,8 +7,10 @@ import { describe, it, expect, beforeAll } from "vitest";
 import scanner from "../src/main/scanner.js";
 import analyze from "../src/main/analyze.js";
 import rules from "../src/main/rules.js";
+import library from "../src/main/library.js";
 
 const { scanDirectory } = scanner;
+const { groupBySeries } = library;
 const { analyzeSelection } = analyze;
 const {
     axisRequirement,
@@ -501,6 +503,127 @@ describe("rule file discovery", () => {
             "empty.dcmsort.json"
         ]);
         expect(rejected.find((r) => r.filePath.endsWith("empty.dcmsort.json")).reason).toMatch(/no child series/);
+    });
+});
+
+describe("series ordering", () => {
+    const record = (over) => ({
+        seriesNumber: 4,
+        accessionNumber: "A1",
+        studyInstanceUID: "1.2.3",
+        studyDate: "20250101",
+        studyTime: "120000",
+        seriesInstanceUID: "s1",
+        filePath: "/data/a/IM-0001.dcm",
+        ...over
+    });
+
+    it("falls back to the first file path when everything else ties", () => {
+        // Two series can legitimately share a number, description and study;
+        // volume ids are positional, so the order still has to be decided.
+        const a = record({ seriesInstanceUID: "sa", filePath: "/data/a/IM-0001.dcm" });
+        const b = record({ seriesInstanceUID: "sb", filePath: "/data/b/IM-0001.dcm" });
+
+        expect(groupBySeries([b, a]).map((g) => g.seriesInstanceUID)).toEqual(["sa", "sb"]);
+        expect(groupBySeries([a, b]).map((g) => g.seriesInstanceUID)).toEqual(["sa", "sb"]);
+    });
+
+    it("orders by series number first, unnumbered last", () => {
+        const first = record({ seriesNumber: 2, seriesInstanceUID: "s2", filePath: "/z.dcm" });
+        const second = record({ seriesNumber: 10, seriesInstanceUID: "s10", filePath: "/a.dcm" });
+        const none = record({ seriesNumber: null, seriesInstanceUID: "sx", filePath: "/b.dcm" });
+
+        expect(groupBySeries([none, second, first]).map((g) => g.seriesInstanceUID)).toEqual([
+            "s2",
+            "s10",
+            "sx"
+        ]);
+    });
+});
+
+describe("merge mode", () => {
+    const merging = (childSeries) => ({ mode: "merge", childSeries });
+
+    // v1 of the fixture series is 8 x 4, v2 is 8 x 2.
+    const segment = (id, volumeId, phases, attributes = {}) => ({
+        id,
+        label: id,
+        selections: [{ volumeId, slices: "*", phases }],
+        attributes: { ...defaultAttributes(), ...attributes }
+    });
+
+    it("defaults to splitting when a rule set says nothing", () => {
+        expect(normalizeRuleSet({ childSeries: [] }).mode).toBe("split");
+        expect(normalizeRuleSet({ mode: "sideways", childSeries: [] }).mode).toBe("split");
+        expect(normalizeRuleSet({ mode: "merge", childSeries: [] }).mode).toBe("merge");
+    });
+
+    it("leaves splitting untouched, with segments and outputs the same thing", () => {
+        const plan = resolveRuleSet({ childSeries: [segment("cs-1", "v1", "1-2")] }, analysis);
+        expect(plan.mode).toBe("split");
+        expect(plan.segments).toBe(plan.childSeries);
+    });
+
+    it("combines the segments into one series, in the order listed", () => {
+        const plan = resolveRuleSet(
+            merging([segment("cs-1", "v2", "*"), segment("cs-2", "v1", "1")]),
+            analysis
+        );
+
+        expect(plan.childSeries).toHaveLength(1);
+        const [merged] = plan.childSeries;
+
+        // v2 is 8x2 = 16 files, then v1 phase 1 = 8 files.
+        expect(merged.fileCount).toBe(24);
+        expect(merged.cells.map((c) => c.volumeId)).toEqual([...Array(16).fill("v2"), ...Array(8).fill("v1")]);
+        expect(merged.cells.map((c) => c.outputInstanceNumber)).toEqual(
+            Array.from({ length: 24 }, (_, i) => i + 1)
+        );
+    });
+
+    it("tells each segment where it landed in the merged series", () => {
+        const plan = resolveRuleSet(
+            merging([segment("cs-1", "v2", "*"), segment("cs-2", "v1", "1")]),
+            analysis
+        );
+        expect(plan.segments.map((s) => [s.instanceStart, s.instanceEnd])).toEqual([[1, 16], [17, 24]]);
+    });
+
+    it("takes the first segment's attributes for the merged series", () => {
+        const plan = resolveRuleSet(
+            merging([
+                segment("cs-1", "v1", "*", { seriesOffset: 7, descriptionPrefix: "FIRST:" }),
+                segment("cs-2", "v2", "*", { seriesOffset: 9, descriptionPrefix: "SECOND:" })
+            ]),
+            analysis
+        );
+        const [merged] = plan.childSeries;
+        expect(merged.seriesNumber).toBe(407);
+        expect(merged.seriesDescription).toMatch(/^FIRST:/);
+    });
+
+    it("keeps a file that two segments both take, so a phase can be repeated", () => {
+        const plan = resolveRuleSet(
+            merging([segment("cs-1", "v1", "1"), segment("cs-2", "v1", "1")]),
+            analysis
+        );
+        const [merged] = plan.childSeries;
+        expect(merged.fileCount).toBe(16);
+
+        const paths = merged.cells.map((c) => c.record.filePath);
+        expect(new Set(paths).size).toBe(8);
+        expect(plan.conflicts.some((c) => /appears 2 times in the merged series/.test(c.message))).toBe(true);
+    });
+
+    it("warns when renumbering is off, since the segments would collide", () => {
+        const plan = resolveRuleSet(
+            merging([
+                segment("cs-1", "v1", "1", { renumberInstances: false }),
+                segment("cs-2", "v2", "1", { renumberInstances: false })
+            ]),
+            analysis
+        );
+        expect(plan.conflicts.some((c) => /colliding instance numbers/.test(c.message))).toBe(true);
     });
 });
 

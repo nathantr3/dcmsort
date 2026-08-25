@@ -228,10 +228,14 @@ function patch(child, resolved) {
     groups.heading.textContent = `Editing ${child.label}`;
 }
 
-export function renderAttrEditor(container, { ruleSet, preview: plan, focusedChildId, actions, palette }) {
+export function renderAttrEditor(container, { ruleSet, preview: plan, focusedChildId, actions, palette, merging }) {
     const child = ruleSet.childSeries.find((cs) => cs.id === focusedChildId);
-    const key = structureKey(child);
-    const resolved = child ? (plan?.childSeries || []).find((cs) => cs.id === child.id) : null;
+    const key = `${structureKey(child)}:${merging ? "merge" : "split"}`;
+    // Merging writes one series, whose values come from the merged output
+    // rather than from whichever segment happens to be focused.
+    const resolved = merging
+        ? plan?.childSeries?.[0]
+        : child && (plan?.childSeries || []).find((cs) => cs.id === child.id);
 
     if (key === lastKey && container.childElementCount) {
         patch(child, resolved);
@@ -250,12 +254,28 @@ export function renderAttrEditor(container, { ruleSet, preview: plan, focusedChi
         return;
     }
 
+    // The segments are held identical while merging, so say so rather than
+    // letting it look as though this panel edits one of them.
+    const mergeNote = merging
+        ? el("div", {
+              class: "attr-merge-note small",
+              text: "These apply to the whole merged series - every segment shares them."
+          })
+        : null;
+
     const set = (patchAttrs) => actions.updateChildAttributes(child.id, patchAttrs);
     const heading = el("div", { class: "muted small" });
     const number = seriesNumberGroup(child.attributes, set);
     const description = descriptionGroup(child.attributes, set);
 
-    container.append(heading, number, description, identityGroup(child.attributes, set), colorGroup(child, actions, palette));
+    container.append(
+        ...(mergeNote ? [mergeNote] : []),
+        heading,
+        number,
+        description,
+        identityGroup(child.attributes, set),
+        colorGroup(child, actions, palette)
+    );
 
     groups = { heading, number, description };
     patch(child, resolved);

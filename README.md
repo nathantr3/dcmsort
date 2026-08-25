@@ -150,6 +150,7 @@ it**: no series UID, number or description, nothing about where it came from.
 ```json
 {
   "version": 1,
+  "mode": "split",
   "requirements": {
     "volumeCount": 3,
     "volumes": { "v1": { "phases": { "exact": 4 } } }
@@ -158,6 +159,14 @@ it**: no series UID, number or description, nothing about where it came from.
   "childSeries": [ ... ]
 }
 ```
+
+`mode` decides what becomes of the child series. Absent, or `"split"`, writes
+each one as its own output series - what every rule set did before merging
+existed, and what one that says nothing still does. `"merge"` concatenates
+them, in the order they are listed, into a single output series: instance
+numbers run straight through the result, and the first child's attributes give
+the merged series its number and description. The app keeps every child's
+attributes identical while merging, so any of them can be edited.
 
 `requirements` is the shape the rules need, narrowed to the axes they actually
 index. A selection of `slices *` says nothing about how many slices there
@@ -195,11 +204,17 @@ adopted and the series it fits are ticked; several, and it asks which to use
 when you press Analyze, showing what each one needs, what it produces, and
 which of the series in front of you it matches.
 
-`apply` takes **each series in the folder on its own**: it analyzes that series
-alone - so its volumes always start at `v1` - and offers the rule set to it. A
-series whose shape does not match is skipped with a reason and the run carries
-on, which is what lets one saved file be re-run over folders it was not built
-on.
+A **merging** rule set has a single unit of work: every series in the folder,
+taken together as one input. It either fits that input or the run aborts -
+there is no series-by-series fallback, and merging the wrong images would be
+far worse than doing nothing. Point it at a folder holding just the data to
+merge, or narrow the input with `--series`.
+
+A **splitting** rule set takes **each series in the folder on its own**: it analyzes that series
+: it analyzes that series alone - so its volumes always start at `v1` - and
+offers the rule set to it. A series whose shape does not match is skipped with
+a reason and the run carries on, which is what lets one saved file be re-run
+over folders it was not built on.
 
 Narrow the run with `--series`, repeatable, taking a SeriesNumber, a
 SeriesInstanceUID, or a substring of the SeriesDescription. `--dry-run` reports

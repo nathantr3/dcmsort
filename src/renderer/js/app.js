@@ -23,7 +23,7 @@ const state = {
     selectedSeries: new Set(),
     analysis: null,
     phaseKeyOverrides: {},
-    ruleSet: { version: 1, childSeries: [] },
+    ruleSet: { version: 1, mode: "split", childSeries: [] },
     preview: null,
     focusedChildId: null,
     messages: [],
@@ -259,13 +259,14 @@ async function analyzeSelected() {
     state.pendingRuleSet = null;
 
     state.analysis = analysis;
-    state.ruleSet = pending ?? { version: 1, childSeries: [] };
+    state.ruleSet = pending ?? { version: 1, mode: "split", childSeries: [] };
     state.focusedChildId = state.ruleSet.childSeries[0]?.id ?? null;
     state.nextChildIndex = state.ruleSet.childSeries.length;
     state.preview = null;
 
     goToWorkspace();
     renderWorkspaceStructure();
+    renderModeUI();
 
     if (state.ruleSet.childSeries.length) {
         await refreshPreview();
@@ -322,6 +323,14 @@ function renderWorkspaceStructure() {
     setMessages(analysis.warnings.map((message) => ({ level: "warning", message })));
 }
 
+/** Keep the merge toggle and the panel heading in step with the rule set. */
+function renderModeUI() {
+    const merging = state.ruleSet.mode === "merge";
+    $("#chk-merge-mode").checked = merging;
+    $("#rules-panel-title").textContent = merging ? "Merged series - segments in order" : "Child series";
+    $("#btn-add-child").textContent = merging ? "+ Add segment" : "+ Add child series";
+}
+
 /** Rebuild the rule and attribute panels, then repaint the claim colours. */
 function renderRules() {
     renderRuleEditor($("#rule-editor"), {
@@ -333,6 +342,7 @@ function renderRules() {
     });
     renderAttrEditor($("#attr-editor"), {
         ruleSet: state.ruleSet,
+        merging: state.ruleSet.mode === "merge",
         preview: state.preview,
         focusedChildId: state.focusedChildId,
         actions: workspaceActions,
@@ -449,10 +459,50 @@ const workspaceActions = {
         refreshPreview();
     },
 
+    /**
+     * Merging produces one series, so there is one set of attributes to set.
+     * Rather than a second place to keep them, every segment's attributes are
+     * held identical and the first is what gets written.
+     */
     updateChildAttributes(id, patch) {
-        const child = state.ruleSet.childSeries.find((cs) => cs.id === id);
-        if (!child) return;
-        Object.assign(child.attributes, patch);
+        const targets =
+            state.ruleSet.mode === "merge"
+                ? state.ruleSet.childSeries
+                : state.ruleSet.childSeries.filter((cs) => cs.id === id);
+
+        for (const child of targets) Object.assign(child.attributes, patch);
+        if (targets.length) refreshPreview();
+    },
+
+    setMode(mode) {
+        if (state.ruleSet.mode === mode) return;
+        state.ruleSet.mode = mode;
+
+        // Bring the segments into line the moment merging starts, so the panel
+        // is showing what will actually be written.
+        if (mode === "merge") {
+            const source =
+                state.ruleSet.childSeries.find((cs) => cs.id === state.focusedChildId) ??
+                state.ruleSet.childSeries[0];
+            if (source) {
+                for (const child of state.ruleSet.childSeries) {
+                    child.attributes = { ...source.attributes };
+                }
+            }
+        }
+
+        renderModeUI();
+        refreshPreview();
+    },
+
+    moveChild(id, delta) {
+        const list = state.ruleSet.childSeries;
+        const from = list.findIndex((cs) => cs.id === id);
+        const to = from + delta;
+        if (from === -1 || to < 0 || to >= list.length) return;
+
+        list.splice(to, 0, list.splice(from, 1)[0]);
+        state.focusedChildId = id;
         refreshPreview();
     },
 
@@ -537,6 +587,7 @@ async function loadRules() {
     // rules would resolve against a different ordering than they were built on.
     if (await restorePhaseKeys(loaded.ruleSet)) renderWorkspaceStructure();
 
+    renderModeUI();
     await refreshPreview();
     if (loaded.problems.length) {
         setMessages([
@@ -556,6 +607,9 @@ function init() {
     $("#btn-analyze").addEventListener("click", analyzeSelected);
     $("#btn-back").addEventListener("click", goToLibrary);
     $("#btn-add-child").addEventListener("click", () => workspaceActions.addChild());
+    $("#chk-merge-mode").addEventListener("change", (event) => {
+        workspaceActions.setMode(event.target.checked ? "merge" : "split");
+    });
     $("#btn-save-rules").addEventListener("click", saveRules);
     $("#btn-load-rules").addEventListener("click", loadRules);
     $("#btn-export").addEventListener("click", () => {

@@ -37,7 +37,8 @@ Usage:
   dcmsort analyze --folder <dir> [options]
 
 Commands:
-  apply     Apply a saved rule set to every matching series in the folder.
+  apply     Apply a saved rule set. A splitting rule set is offered to every
+            series in the folder; a merging one takes them all as one input.
   list      Print the exams and series found in the folder.
   analyze   Print the volumes detected in each series (slices x phases).
 
@@ -60,8 +61,12 @@ Options:
   --help              Print this message.
 
 A rule set records the shape it needs - how many volumes, and the extent of
-only those axes its selections index - so it is offered to every series and
-applied to the ones that match.
+only those axes its selections index - so a splitting rule set is offered to
+every series and applied to the ones that match.
+
+A merging rule set combines its segments, in order, into one output series. It
+has a single unit of work - every series in the folder at once - so it either
+fits that input or aborts. Narrow the input with --series.
 
 Exit status is 0 when nothing failed - including a run where every series was
 skipped because the rules did not fit - and 1 when a file could not be read or
@@ -337,6 +342,10 @@ async function cmdApply(flags, report) {
         throw new Error(`No series in ${flags.folder} matched ${flags.series.join(", ")}`);
     }
 
+    if (ruleSet.mode === "merge") {
+        return applyMerge(groups, { ruleSet, rulesPath, target, flags, report });
+    }
+
     const results = [];
     let failed = false;
 
@@ -374,6 +383,98 @@ async function cmdApply(flags, report) {
     else report.out(renderSummary(summary));
 
     return failed ? 1 : 0;
+}
+
+/**
+ * Apply a merging rule set, which has exactly one unit of work: everything the
+ * folder holds, taken together and combined into a single series.
+ *
+ * There is no series-by-series fallback to try here, so a shape that does not
+ * match is a failure rather than a skip - merging the wrong images would be
+ * far worse than doing nothing.
+ */
+async function applyMerge(groups, { ruleSet, rulesPath, target, flags, report }) {
+    const analysis = analyzeSelection(groups, { phaseKeyOverrides: ruleSet.phaseKeyOverrides });
+
+    const problems = rules.checkRuleSetFit(ruleSet, analysis);
+    if (problems.length) {
+        throw new Error(
+            `These rules merge ${pluralizeSegments(ruleSet)} and need a different input than ${flags.folder} holds:\n` +
+                problems.map((p) => `  ${p.message}`).join("\n") +
+                `\nMerging takes every series in the folder as one input; narrow it with --series.`
+        );
+    }
+
+    const plan = rules.resolveRuleSet(ruleSet, analysis);
+    const blocking = plan.conflicts.filter((c) => c.level === "error");
+    if (blocking.length) throw new Error(blocking.map((c) => c.message).join(" "));
+
+    const [merged] = plan.childSeries;
+    const segments = plan.segments.map((seg) => ({
+        label: seg.label,
+        fileCount: seg.fileCount,
+        instanceStart: seg.instanceStart,
+        instanceEnd: seg.instanceEnd
+    }));
+
+    report.say(
+        `Merging ${pluralizeSegments(ruleSet)} from ${groups.length} series into ` +
+            `${merged.seriesNumber} ${merged.seriesDescription} - ${merged.fileCount} files`
+    );
+    for (const seg of segments) {
+        report.say(`  ${seg.label} - ${seg.fileCount} files, instances ${seg.instanceStart}-${seg.instanceEnd}`);
+    }
+
+    const summary = {
+        folder: flags.folder,
+        rules: path.resolve(rulesPath),
+        mode: "merge",
+        target,
+        dryRun: Boolean(flags.dryRun),
+        seriesConsumed: groups.length,
+        segments,
+        output: {
+            seriesNumber: merged.seriesNumber,
+            seriesDescription: merged.seriesDescription,
+            fileCount: merged.fileCount
+        },
+        filesWritten: 0,
+        errorCount: 0
+    };
+
+    if (!flags.dryRun) {
+        const result = await exportPlan(plan, target, {
+            onProgress: (p) => report.progress(`merging: ${p.processed} / ${p.totalFiles} written`)
+        });
+        report.endProgress();
+        for (const err of result.errors.slice(0, 10)) report.say(`  error ${err.filePath}: ${err.message}`);
+
+        summary.filesWritten = result.stats.writtenCount;
+        summary.errorCount = result.stats.errorCount;
+    }
+
+    if (flags.json) report.out(JSON.stringify(summary, null, 2));
+    else report.out(renderMergeSummary(summary));
+
+    return summary.errorCount ? 1 : 0;
+}
+
+function pluralizeSegments(ruleSet) {
+    const n = ruleSet.childSeries.length;
+    return `${n} segment${n === 1 ? "" : "s"}`;
+}
+
+function renderMergeSummary(summary) {
+    const { output } = summary;
+    const verb = summary.dryRun ? "would merge" : "merged";
+    return (
+        `${verb} ${summary.segments.length} segments from ${summary.seriesConsumed} series into ` +
+        `${output.seriesNumber} ${output.seriesDescription}, ` +
+        (summary.dryRun
+            ? `${output.fileCount} files`
+            : `${summary.filesWritten} files written` +
+              (summary.errorCount ? `, ${summary.errorCount} failed` : ""))
+    );
 }
 
 /** Run one series through fit check, resolution, and export. */

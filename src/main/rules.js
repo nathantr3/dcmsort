@@ -5,9 +5,14 @@
  * land in which output series, carrying which attributes.
  *
  * A rule set is the document the GUI edits and `saveRuleSet` persists. Each
- * child series is one output series, defined by selections that read as
- * "FROM volume 1 SELECT slices * AND phases 1-3", plus the attribute edits to
- * apply to whatever those selections match.
+ * child series is defined by selections that read as "FROM volume 1 SELECT
+ * slices * AND phases 1-3", plus the attribute edits to apply to whatever
+ * those selections match.
+ *
+ * `mode` decides what becomes of them. Splitting - the default, and what a
+ * rule set that says nothing does - writes each child as its own output
+ * series. Merging concatenates them, in the order they are listed, into a
+ * single output series.
  *
  * Selections bind to volumes positionally, by id, and to nothing else. A saved
  * rule set therefore records nothing about where it came from - no series UID,
@@ -218,7 +223,7 @@ function makeChildSeries(index, overrides = {}) {
 }
 
 function emptyRuleSet() {
-    return { version: RULESET_VERSION, childSeries: [] };
+    return { version: RULESET_VERSION, mode: "split", childSeries: [] };
 }
 
 /* ------------------------------------------------------------------ */
@@ -391,6 +396,9 @@ function normalizeRuleSet(ruleSet) {
     }));
     return {
         version: RULESET_VERSION,
+        // Split unless a rule set says otherwise, so anything that does not
+        // ask to merge behaves exactly as it always has.
+        mode: ruleSet?.mode === "merge" ? "merge" : "split",
         // The shape these rules need, and the whole of what a rule file says
         // about where it came from. A set still being built in the app has
         // none until it is saved against an analysis.
@@ -534,6 +542,7 @@ function summarizeRuleSet(ruleSet) {
         .filter((v) => v.needs.length);
 
     return {
+        mode: ruleSet?.mode === "merge" ? "merge" : "split",
         requires: requirements ? { volumeCount: requirements.volumeCount ?? null, volumes } : null,
         childSeries: (ruleSet?.childSeries || []).map((cs) => ({
             label: cs.label,
@@ -562,7 +571,7 @@ function resolveRuleSet(ruleSet, analysis) {
     const volumesById = new Map(analysis.volumes.map((v) => [v.id, v]));
     const conflicts = [];
     const claimsByPath = new Map();
-    const resolved = [];
+    const segments = [];
 
     for (const cs of normalized.childSeries) {
         const cells = [];
@@ -643,7 +652,7 @@ function resolveRuleSet(ruleSet, analysis) {
             });
         }
 
-        resolved.push({
+        segments.push({
             ...cs,
             cells,
             selectionCounts,
@@ -657,9 +666,11 @@ function resolveRuleSet(ruleSet, analysis) {
         });
     }
 
+    const childSeries = normalized.mode === "merge" ? [mergeSegments(segments, conflicts)] : segments;
+
     // Two output series sharing a number confuses every viewer, so flag it.
     const numberOwners = new Map();
-    for (const cs of resolved) {
+    for (const cs of childSeries) {
         if (cs.seriesNumber === null || !cs.fileCount) continue;
         if (!numberOwners.has(cs.seriesNumber)) numberOwners.set(cs.seriesNumber, []);
         numberOwners.get(cs.seriesNumber).push(cs.label);
@@ -676,11 +687,15 @@ function resolveRuleSet(ruleSet, analysis) {
 
     for (const [filePath, owners] of claimsByPath) {
         if (owners.length > 1) {
+            const name = filePath.split("/").pop();
             conflicts.push({
                 level: "info",
                 childSeriesId: null,
                 filePath,
-                message: `${filePath.split("/").pop()} is claimed by ${owners.length} child series; each copy after the first gets a new SOPInstanceUID.`
+                message:
+                    normalized.mode === "merge"
+                        ? `${name} appears ${owners.length} times in the merged series; each copy after the first gets a new SOPInstanceUID.`
+                        : `${name} is claimed by ${owners.length} child series; each copy after the first gets a new SOPInstanceUID.`
             });
         }
     }
@@ -691,10 +706,81 @@ function resolveRuleSet(ruleSet, analysis) {
     }
 
     return {
-        childSeries: resolved,
+        mode: normalized.mode,
+        childSeries,
+        // In split mode these are the same array; reading `segments` works in
+        // both, which is what the editor paints from.
+        segments,
         claimsByPath,
         unclaimedPaths: [...unclaimed],
         conflicts
+    };
+}
+
+/**
+ * Fold the segments into the single series a merge produces.
+ *
+ * The segments keep their own resolution - that is what the editor colours and
+ * counts - and are concatenated here in the order they are listed, which is
+ * the whole ordering mechanism. Instance numbers are then handed out across
+ * the finished series so every image lands where the order says it should.
+ *
+ * The first segment's attributes govern: the app keeps every segment's
+ * attributes identical while merging, so any of them would do.
+ */
+function mergeSegments(segments, conflicts) {
+    const first = segments[0];
+    const cells = [];
+
+    for (const segment of segments) {
+        segment.instanceStart = cells.length + 1;
+        cells.push(...segment.cells);
+        segment.instanceEnd = cells.length;
+    }
+    cells.forEach((cell, i) => {
+        cell.outputInstanceNumber = i + 1;
+    });
+
+    const attributes = first?.attributes ?? defaultAttributes();
+    const base = cells[0]?.record;
+    const baseNumbers = new Set(cells.map((c) => c.record.seriesNumber));
+    const baseDescriptions = new Set(cells.map((c) => c.record.seriesDescription));
+
+    if (!cells.length) {
+        conflicts.push({ level: "warning", childSeriesId: "merged", message: "The merged series matches no files." });
+    }
+    if (baseNumbers.size > 1 && attributes.seriesNumberMode === "scaleOffset") {
+        conflicts.push({
+            level: "warning",
+            childSeriesId: "merged",
+            message: `The merged series joins files from series ${[...baseNumbers].join(", ")}; the scale/offset formula uses ${base?.seriesNumber} as the base.`
+        });
+    }
+    // Concatenated segments carry their own instance numbers, which collide the
+    // moment two of them cover the same slice.
+    if (!attributes.renumberInstances && segments.length > 1) {
+        conflicts.push({
+            level: "warning",
+            childSeriesId: "merged",
+            message: "Instance renumbering is off, so the merged segments will carry colliding instance numbers."
+        });
+    }
+
+    return {
+        id: "merged",
+        label: first?.label ?? "Merged series",
+        color: first?.color ?? paletteColor(0),
+        attributes,
+        selections: segments.flatMap((segment) => segment.selections),
+        cells,
+        selectionCounts: segments.flatMap((segment) => segment.selectionCounts),
+        fileCount: cells.length,
+        baseSeriesNumber: base?.seriesNumber ?? null,
+        baseSeriesDescription: base?.seriesDescription ?? null,
+        baseDescriptionsDiffer: baseDescriptions.size > 1,
+        seriesNumber: computeSeriesNumber(attributes, base?.seriesNumber),
+        seriesDescription: computeDescription(attributes, base?.seriesDescription),
+        seriesInstanceUID: null
     };
 }
 
