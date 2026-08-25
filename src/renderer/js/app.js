@@ -26,20 +26,35 @@ const state = {
     preview: null,
     focusedChildId: null,
     messages: [],
-    nextChildIndex: 0
+    nextChildIndex: 0,
+    // A rule set found next to the DICOMs, waiting for an analysis to apply to.
+    pendingRuleSet: null,
+    pendingRuleFile: null
 };
 
 /* ------------------------------------------------------------------ */
 /* Messages                                                            */
 /* ------------------------------------------------------------------ */
 
-function setMessages(messages) {
-    state.messages = messages;
-    const box = $("#workspace-messages");
+function renderMessages(box, messages) {
     clear(box);
     for (const m of messages) {
         box.append(el("div", { class: `message ${m.level || "info"}`, text: m.message }));
     }
+}
+
+function setMessages(messages) {
+    state.messages = messages;
+    renderMessages($("#workspace-messages"), messages);
+}
+
+function setLibraryMessages(messages) {
+    renderMessages($("#library-messages"), messages);
+}
+
+/** Last path segment, for naming a rule file in a message. */
+function basename(filePath) {
+    return String(filePath || "").split(/[\\/]/).pop();
 }
 
 /* ------------------------------------------------------------------ */
@@ -91,6 +106,10 @@ async function chooseAndScan() {
 }
 
 async function scan(root) {
+    state.pendingRuleSet = null;
+    state.pendingRuleFile = null;
+    setLibraryMessages([]);
+
     const bar = $("#scan-progress");
     bar.classList.remove("hidden");
     const fill = bar.querySelector(".progress-fill");
@@ -115,6 +134,7 @@ async function scan(root) {
         state.library = result.library;
         state.selectedSeries = new Set();
         renderLibraryStage();
+        applyDiscoveredRules(result.ruleFile);
 
         if (!result.library.studies.length) {
             $("#library-subtitle").textContent = `${root}  -  no DICOM files found`;
@@ -127,6 +147,53 @@ async function scan(root) {
     }
 }
 
+/**
+ * Take up a rule set found in the scanned folder. The rules cannot be applied
+ * yet - they only mean something once volumes exist - so they are held until
+ * the user analyses, and the series they were built from are ticked so that is
+ * a single click away.
+ */
+function applyDiscoveredRules(found) {
+    if (!found) return;
+
+    if (found.ambiguous) {
+        setLibraryMessages([
+            {
+                level: "info",
+                message: `This folder has several rule files (${found.ambiguous.join(", ")}) and none named rules.dcmsort.json, so none was loaded. Pick one with File > Load Rule Set.`
+            }
+        ]);
+        return;
+    }
+
+    if (found.error) {
+        setLibraryMessages([
+            { level: "warning", message: `Ignored ${basename(found.filePath)}: ${found.error}` }
+        ]);
+        return;
+    }
+
+    state.pendingRuleSet = found.ruleSet;
+    state.pendingRuleFile = found.filePath;
+
+    const available = new Set(
+        state.library.studies.flatMap((study) => study.series.map((s) => s.seriesInstanceUID))
+    );
+    const wanted = found.ruleSet.sourceSeries || [];
+    const present = wanted.filter((uid) => available.has(uid));
+    for (const uid of present) state.selectedSeries.add(uid);
+    renderLibraryStage();
+
+    setLibraryMessages([
+        {
+            level: "info",
+            message: present.length
+                ? `Found ${basename(found.filePath)} - ${present.length} of ${pluralize(wanted.length, "series", "series")} pre-selected. The rules apply when you press Analyze Selected.`
+                : `Found ${basename(found.filePath)}, but none of the series it was saved from are in this folder. The rules still apply to whatever you analyze.`
+        }
+    ]);
+}
+
 /* ------------------------------------------------------------------ */
 /* Stage B: workspace                                                  */
 /* ------------------------------------------------------------------ */
@@ -136,19 +203,37 @@ async function analyzeSelected() {
     if (!uids.length) return;
 
     const analysis = await window.dcmsort.analyzeSelection(uids, state.phaseKeyOverrides);
+    // Rules found alongside the folder are consumed here: the spread keeps the
+    // saved volumeFingerprints, which checkRules needs to spot a mismatch.
+    const pending = state.pendingRuleSet;
+    state.pendingRuleSet = null;
+
     state.analysis = analysis;
-    state.ruleSet = { version: 1, sourceSeries: uids, childSeries: [] };
-    state.focusedChildId = null;
-    state.nextChildIndex = 0;
+    state.ruleSet = pending
+        ? { ...pending, sourceSeries: uids }
+        : { version: 1, sourceSeries: uids, childSeries: [] };
+    state.focusedChildId = state.ruleSet.childSeries[0]?.id ?? null;
+    state.nextChildIndex = state.ruleSet.childSeries.length;
     state.preview = null;
 
     goToWorkspace();
     renderWorkspaceStructure();
 
-    // A useful default beats an empty canvas: one child series covering the
-    // largest volume, which the user can immediately narrow.
-    if (analysis.volumes.length) workspaceActions.addChild();
-    else await refreshPreview();
+    if (state.ruleSet.childSeries.length) {
+        await refreshPreview();
+        const problems = await window.dcmsort.checkRules(state.ruleSet);
+        setMessages([
+            { level: "info", message: `Rules from ${basename(state.pendingRuleFile)}` },
+            ...problems.map((p) => ({ level: p.level, message: p.message })),
+            ...state.messages
+        ]);
+    } else if (analysis.volumes.length) {
+        // A useful default beats an empty canvas: one child series covering the
+        // largest volume, which the user can immediately narrow.
+        workspaceActions.addChild();
+    } else {
+        await refreshPreview();
+    }
 }
 
 function goToWorkspace() {

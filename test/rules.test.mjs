@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect, beforeAll } from "vitest";
@@ -18,6 +19,7 @@ const {
     computeSeriesNumber,
     computeDescription,
     stripPrefix,
+    findRuleFile,
     defaultAttributes,
     resolveRuleSet,
     emptyRuleSet
@@ -366,5 +368,36 @@ describe("rule set portability", () => {
         expect(attrs.descriptionStripPrefix).toBeNull();
         // The old behaviour is unchanged by the new field being absent.
         expect(computeDescription(attrs, "NOT DIAGNOSTIC: T1 VIBE")).toBe("NOT DIAGNOSTIC: T1 VIBE");
+    });
+});
+
+describe("findRuleFile", () => {
+    function tempDir(names) {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dcmsort-rules-"));
+        for (const name of names) fs.writeFileSync(path.join(dir, name), "{}\n");
+        return dir;
+    }
+
+    it("finds nothing in a folder without rule files", async () => {
+        expect(await findRuleFile(tempDir(["notes.txt", "IM-0001.dcm"]))).toBeNull();
+    });
+
+    it("finds nothing in a folder that does not exist", async () => {
+        expect(await findRuleFile(path.join(os.tmpdir(), "dcmsort-does-not-exist"))).toBeNull();
+    });
+
+    it("prefers the default name over other rule files", async () => {
+        const dir = tempDir(["zzz.dcmsort.json", "rules.dcmsort.json"]);
+        expect(await findRuleFile(dir)).toEqual({ filePath: path.join(dir, "rules.dcmsort.json") });
+    });
+
+    it("takes a lone rule file whatever it is called", async () => {
+        const dir = tempDir(["cardiac.dcmsort.json", "unrelated.json"]);
+        expect(await findRuleFile(dir)).toEqual({ filePath: path.join(dir, "cardiac.dcmsort.json") });
+    });
+
+    it("refuses to choose between several rule files", async () => {
+        const dir = tempDir(["b.dcmsort.json", "a.dcmsort.json"]);
+        expect(await findRuleFile(dir)).toEqual({ ambiguous: ["a.dcmsort.json", "b.dcmsort.json"] });
     });
 });

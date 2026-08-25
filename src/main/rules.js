@@ -10,7 +10,39 @@
  * apply to whatever those selections match.
  */
 
+const fsp = require("fs/promises");
+const path = require("path");
+
 const RULESET_VERSION = 1;
+
+/**
+ * A rule set usually belongs to one folder of DICOMs, so we look for one there
+ * on every scan. `rules.dcmsort.json` is what the save dialog offers, and it
+ * wins outright; otherwise a lone `*.dcmsort.json` is unambiguous enough to
+ * take. Several of those and no default name is a choice we cannot make for
+ * the user.
+ */
+const RULE_FILE_NAME = "rules.dcmsort.json";
+const RULE_FILE_SUFFIX = ".dcmsort.json";
+
+/**
+ * @param {string} root folder to look in, top level only
+ * @returns {Promise<{filePath: string} | {ambiguous: string[]} | null>}
+ */
+async function findRuleFile(root) {
+    let entries;
+    try {
+        entries = await fsp.readdir(root, { withFileTypes: true });
+    } catch {
+        return null;
+    }
+
+    const names = entries.filter((e) => e.isFile() && e.name.endsWith(RULE_FILE_SUFFIX)).map((e) => e.name);
+    if (names.includes(RULE_FILE_NAME)) return { filePath: path.join(root, RULE_FILE_NAME) };
+    if (names.length === 1) return { filePath: path.join(root, names[0]) };
+    if (names.length > 1) return { ambiguous: names.sort() };
+    return null;
+}
 
 /**
  * Twelve hues that stay distinguishable from one another on the dark surface
@@ -429,6 +461,9 @@ function resolveRuleSet(ruleSet, analysis) {
 
 module.exports = {
     RULESET_VERSION,
+    RULE_FILE_NAME,
+    RULE_FILE_SUFFIX,
+    findRuleFile,
     PALETTE,
     paletteColor,
     parseRange,

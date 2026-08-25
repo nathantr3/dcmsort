@@ -93,6 +93,29 @@ function planForRenderer(plan) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Rule file discovery                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Look for a rule set living alongside the DICOMs, so re-opening a folder does
+ * not mean re-finding its rules by hand. A rule file that will not parse is
+ * reported and skipped: it must never take the scan down with it.
+ *
+ * @returns {Promise<{filePath: string, ruleSet: object} | {filePath: string, error: string} | {ambiguous: string[]} | null>}
+ */
+async function discoverRuleSet(root) {
+    const found = await rules.findRuleFile(root);
+    if (!found || !found.filePath) return found;
+
+    try {
+        const raw = JSON.parse(await fsp.readFile(found.filePath, "utf8"));
+        return { filePath: found.filePath, ruleSet: rules.normalizeRuleSet(raw) };
+    } catch (err) {
+        return { filePath: found.filePath, error: err.message };
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Handlers                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -119,7 +142,13 @@ function register() {
         state.recordsByPath = new Map(records.map((r) => [r.filePath, r]));
         state.analysis = null;
 
-        return { root, library: buildLibrary(records), stats, errors: errors.slice(0, 100) };
+        return {
+            root,
+            library: buildLibrary(records),
+            stats,
+            errors: errors.slice(0, 100),
+            ruleFile: await discoverRuleSet(root)
+        };
     });
 
     ipcMain.handle("scan:cancel", () => {
@@ -171,7 +200,7 @@ function register() {
         const win = BrowserWindow.fromWebContents(event.sender);
         const result = await dialog.showSaveDialog(win, {
             title: "Save rule set",
-            defaultPath: "rules.dcmsort.json",
+            defaultPath: state.root ? path.join(state.root, rules.RULE_FILE_NAME) : rules.RULE_FILE_NAME,
             filters: [{ name: "dcmsort rules", extensions: ["json"] }]
         });
         if (result.canceled) return null;
@@ -189,6 +218,7 @@ function register() {
         const win = BrowserWindow.fromWebContents(event.sender);
         const result = await dialog.showOpenDialog(win, {
             title: "Load rule set",
+            defaultPath: state.root || undefined,
             properties: ["openFile"],
             filters: [{ name: "dcmsort rules", extensions: ["json"] }]
         });
