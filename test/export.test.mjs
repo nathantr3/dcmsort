@@ -35,6 +35,21 @@ function makeRuleSet(childSeries) {
     return { ...emptyRuleSet(), childSeries };
 }
 
+/**
+ * Copy a fixture series to a scratch directory, images only.
+ *
+ * A plain recursive copy also drags along whatever the operating system has
+ * left in the fixture folder - .DS_Store above all - which then counts as a
+ * file in the work directory and fails assertions about what is there.
+ */
+function copyImages(from, to) {
+    fs.mkdirSync(to, { recursive: true });
+    for (const name of fs.readdirSync(from)) {
+        if (!name.endsWith(".dcm")) continue;
+        fs.copyFileSync(path.join(from, name), path.join(to, name));
+    }
+}
+
 const child = (overrides) => ({
     id: "cs-1",
     label: "Early phases",
@@ -156,7 +171,7 @@ describe("exportPlan in place", () => {
     it("rewrites the source files and parks extra claims alongside them", async () => {
         // Work on a throwaway copy: in-place export overwrites what it reads.
         const workDir = path.join(tmpRoot, "inplace");
-        fs.cpSync(path.join(FIXTURES, "studyA", "series3"), workDir, { recursive: true });
+        copyImages(path.join(FIXTURES, "studyA", "series3"), workDir);
 
         const { records } = await scanDirectory(workDir);
         const localAnalysis = analyzeSelection([
@@ -180,7 +195,8 @@ describe("exportPlan in place", () => {
         expect(second.every((w) => fs.existsSync(w.outPath))).toBe(true);
 
         // Files the rules did not claim are left exactly as they were.
-        expect(fs.readdirSync(workDir).filter((f) => !f.includes("_cs-2"))).toHaveLength(32);
+        const sources = fs.readdirSync(workDir).filter((f) => f.endsWith(".dcm") && !f.includes("_cs-2"));
+        expect(sources).toHaveLength(32);
         const untouched = await readTags(path.join(workDir, "IM-00002.dcm"));
         expect(untouched.seriesDescription).toBe("CINE SA");
     });
