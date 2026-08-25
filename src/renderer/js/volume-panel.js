@@ -123,16 +123,21 @@ export function renderVolumePanel(container, volumes, actions) {
 export function paintVolumePanel(preview, ruleSet) {
     const colorById = new Map((ruleSet?.childSeries || []).map((cs) => [cs.id, cs.color]));
 
-    // volumeId -> "slice:phase" -> list of colours
+    // volumeId -> "slice:phase" -> list of colours.
+    //
+    // The colour of a cell is the child series that claimed it, which is what
+    // the claims map records. Reading it off the output series a cell landed
+    // in only works while those are the same thing: merging, the one output is
+    // not a child series - its segments are - and every cell would come back
+    // the same colour.
     const claims = new Map();
     for (const cs of preview?.childSeries || []) {
-        const color = colorById.get(cs.id);
         for (const cell of cs.cells) {
+            const owners = preview?.claims?.[cell.filePath] || [];
             if (!claims.has(cell.volumeId)) claims.set(cell.volumeId, new Map());
-            const key = `${cell.sliceIndex}:${cell.phaseIndex}`;
-            const list = claims.get(cell.volumeId).get(key) || [];
-            list.push(color);
-            claims.get(cell.volumeId).set(key, list);
+            claims
+                .get(cell.volumeId)
+                .set(`${cell.sliceIndex}:${cell.phaseIndex}`, owners.map((id) => colorById.get(id)).filter(Boolean));
         }
     }
 
