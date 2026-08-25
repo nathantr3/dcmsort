@@ -13,7 +13,7 @@ const path = require("path");
 const { ipcMain, dialog, BrowserWindow } = require("electron");
 
 const { scanDirectory } = require("./scanner");
-const { buildLibrary } = require("./library");
+const { buildLibrary, groupBySeries } = require("./library");
 const { analyzeSelection } = require("./analyze");
 const rules = require("./rules");
 const { exportPlan } = require("./export");
@@ -101,18 +101,37 @@ function planForRenderer(plan) {
  * not mean re-finding its rules by hand. A rule file that will not parse is
  * reported and skipped: it must never take the scan down with it.
  *
- * @returns {Promise<{filePath: string, ruleSet: object} | {filePath: string, error: string} | {ambiguous: string[]} | null>}
+ * @returns {Promise<{filePath: string, ruleSet: object, fittingSeries: string[]} | {filePath: string, error: string} | {ambiguous: string[]} | null>}
  */
-async function discoverRuleSet(root) {
+async function discoverRuleSet(root, records) {
     const found = await rules.findRuleFile(root);
     if (!found || !found.filePath) return found;
 
     try {
         const raw = JSON.parse(await fsp.readFile(found.filePath, "utf8"));
-        return { filePath: found.filePath, ruleSet: rules.normalizeRuleSet(raw) };
+        const ruleSet = rules.normalizeRuleSet(raw);
+        return { filePath: found.filePath, ruleSet, fittingSeries: seriesFitting(ruleSet, records) };
     } catch (err) {
         return { filePath: found.filePath, error: err.message };
     }
+}
+
+/**
+ * Which series a rule set could be applied to, by shape alone.
+ *
+ * Each series is analyzed on its own, exactly as the CLI applies rules, so its
+ * volumes start at v1 and the requirements mean the same thing in both places.
+ * That is one analysis per series in the folder, but it is in-memory work over
+ * records already read and happens once per scan.
+ */
+function seriesFitting(ruleSet, records) {
+    const fitting = [];
+
+    for (const group of groupBySeries(records)) {
+        const analysis = analyzeSelection([group], { phaseKeyOverrides: ruleSet.phaseKeyOverrides });
+        if (!rules.checkRuleSetFit(ruleSet, analysis).length) fitting.push(group.seriesInstanceUID);
+    }
+    return fitting;
 }
 
 /* ------------------------------------------------------------------ */
@@ -147,7 +166,7 @@ function register() {
             library: buildLibrary(records),
             stats,
             errors: errors.slice(0, 100),
-            ruleFile: await discoverRuleSet(root)
+            ruleFile: await discoverRuleSet(root, records)
         };
     });
 
@@ -205,14 +224,14 @@ function register() {
         });
         if (result.canceled) return null;
 
+        // A rule file carries only what it needs to match new data and apply
+        // to it: the shape it requires, how to order phases, and the rules.
         const document = {
             ...rules.normalizeRuleSet(ruleSet),
+            requirements: rules.describeRequirements(ruleSet, state.analysis),
             // The phase ordering decides what "phases 1-3" selects, so an
             // override the user made by hand has to travel with the rules.
-            phaseKeyOverrides: phaseKeyOverrides || {},
-            source: rules.describeSource(state.analysis),
-            volumeFingerprints: state.analysis ? rules.fingerprintVolumes(state.analysis) : null,
-            savedAt: new Date().toISOString()
+            phaseKeyOverrides: phaseKeyOverrides || {}
         };
         await fsp.writeFile(result.filePath, `${JSON.stringify(document, null, 2)}\n`, "utf8");
         return result.filePath;

@@ -140,6 +140,35 @@ with the child series id appended. Files no rule claims are left exactly as they
 Every file is staged to a temporary path and renamed into place, so an interrupted or failing write
 never leaves a half-written DICOM. A file that fails is recorded and the export continues.
 
+## Rule files
+
+A saved rule set records **only what it needs to match new data and apply to
+it**: no series UID, number or description, nothing about where it came from.
+
+```json
+{
+  "version": 1,
+  "requirements": {
+    "volumeCount": 3,
+    "volumes": { "v1": { "phases": { "exact": 4 } } }
+  },
+  "phaseKeyOverrides": { "v1": "TriggerTime" },
+  "childSeries": [ ... ]
+}
+```
+
+`requirements` is the shape the rules need, narrowed to the axes they actually
+index. A selection of `slices *` says nothing about how many slices there
+should be, so nothing is recorded for that axis and the rules apply to a
+30-slice volume and a 300-slice one alike. An axis indexed by position is
+pinned to the extent it was written against - `phases 1-2` off a 4-phase volume
+requires 4 phases, not 2 - so a rule always fits the data it was built on. The
+relative and open-ended forms exist to follow the size of the data, so `-1` and
+`3-` set a floor rather than a fixed extent.
+
+Volume count is matched exactly: a rule built where the series analyzed into
+three volumes applies only where three come out again.
+
 ## Command line
 
 The same engine runs headless, for scripting a saved rule set over a folder:
@@ -153,16 +182,14 @@ dcmsort analyze --folder /data/patient42      # detected volumes, slices x phase
 
 `apply` takes **each series in the folder on its own**: it analyzes that series
 alone - so its volumes always start at `v1` - and offers the rule set to it. A
-series whose volumes cannot satisfy the rules is skipped with a reason and the
-run carries on, which is what lets one saved file be re-run over folders it was
-not built on. The `sourceSeries` and `source` fields in a rule file record where
-the rules came from and never constrain where they may be applied.
+series whose shape does not match is skipped with a reason and the run carries
+on, which is what lets one saved file be re-run over folders it was not built
+on.
 
 Narrow the run with `--series`, repeatable, taking a SeriesNumber, a
 SeriesInstanceUID, or a substring of the SeriesDescription. `--dry-run` reports
-what would be written without writing it, `--json` emits the summary for a
-script to read, and `--strict` skips any series whose volume shapes differ from
-the ones the rules were saved on. `dcmsort --help` lists everything.
+what would be written without writing it and `--json` emits the summary for a
+script to read. `dcmsort --help` lists everything.
 
 Exit status is 0 when nothing failed - including a run where the rules fitted no
 series at all - and 1 when a file could not be read or written.

@@ -11,7 +11,8 @@ import rules from "../src/main/rules.js";
 const { scanDirectory } = scanner;
 const { analyzeSelection } = analyze;
 const {
-    fingerprintVolumes,
+    axisRequirement,
+    describeRequirements,
     checkRuleSetFit,
     normalizeRuleSet,
     parseRange,
@@ -316,31 +317,78 @@ describe("rule set portability", () => {
         ]
     };
 
-    it("fingerprints each volume by shape and source series", () => {
-        expect(fingerprintVolumes(analysis)).toEqual({ v1: "8x4@4", v2: "8x2@4", v3: "8x1@4" });
+    it("records nothing for an axis the rules never index", () => {
+        // The fixture volume is 8 x 4. Slices are "*", so their count cannot
+        // matter; phases are indexed, so they are pinned to what they were
+        // written against - 4, not the 3 the range mentions.
+        const requirements = describeRequirements(ruleSet, analysis);
+        expect(requirements).toEqual({ volumeCount: 3, volumes: { v1: { phases: { exact: 4 } } } });
     });
 
-    it("passes a rule set saved against the same data", () => {
-        const saved = { ...ruleSet, volumeFingerprints: fingerprintVolumes(analysis) };
+    it("pins an indexed axis to the extent it was built on", () => {
+        expect(axisRequirement(["1-2"], 4)).toEqual({ exact: 4 });
+        expect(axisRequirement(["4"], 10)).toEqual({ exact: 10 });
+        expect(axisRequirement(["1-9:2"], 12)).toEqual({ exact: 12 });
+    });
+
+    it("leaves the relative and open-ended forms free to adapt", () => {
+        // These exist precisely to follow the size of the data.
+        expect(axisRequirement(["*"], 8)).toBeNull();
+        expect(axisRequirement([""], 8)).toBeNull();
+        expect(axisRequirement(["-1"], 6)).toBeNull();
+        expect(axisRequirement(["-3"], 6)).toEqual({ min: 3 });
+        expect(axisRequirement(["3-"], 9)).toEqual({ min: 3 });
+    });
+
+    it("takes the strictest requirement across every selection on the axis", () => {
+        expect(axisRequirement(["*", "1-2"], 4)).toEqual({ exact: 4 });
+        expect(axisRequirement(["2-", "5-"], 9)).toEqual({ min: 5 });
+    });
+
+    it("always fits the data it was built on", () => {
+        // The invariant that rules out deriving the extent from the highest
+        // index a rule mentions: "phases 1-3" of an 8x4 volume needs 4 phases.
+        const saved = { ...ruleSet, requirements: describeRequirements(ruleSet, analysis) };
         expect(checkRuleSetFit(saved, analysis)).toEqual([]);
     });
 
-    it("warns when a volume changed shape since the rules were saved", () => {
-        const saved = { ...ruleSet, volumeFingerprints: { v1: "8x9@4" } };
+    it("refuses an analysis with a different number of volumes", () => {
+        const saved = { ...ruleSet, requirements: { volumeCount: 1, volumes: {} } };
         const problems = checkRuleSetFit(saved, analysis);
         expect(problems).toHaveLength(1);
-        expect(problems[0]).toMatchObject({ level: "warning", volumeId: "v1" });
-        expect(problems[0].message).toMatch(/was 8x9@4 .* but is 8x4@4 now/);
+        expect(problems[0].level).toBe("error");
+        expect(problems[0].message).toMatch(/built on 1 volume; this selection has 3/);
+    });
+
+    it("refuses a volume whose indexed axis is a different size", () => {
+        const saved = { ...ruleSet, requirements: { volumeCount: 3, volumes: { v1: { phases: { exact: 9 } } } } };
+        const problems = checkRuleSetFit(saved, analysis);
+        expect(problems).toEqual([
+            { level: "error", volumeId: "v1", message: "v1 needs exactly 9 phases; this volume has 4." }
+        ]);
+    });
+
+    it("refuses a volume that falls short of a floor", () => {
+        const saved = { ...ruleSet, requirements: { volumeCount: 3, volumes: { v1: { phases: { min: 6 } } } } };
+        expect(checkRuleSetFit(saved, analysis)[0].message).toMatch(/at least 6 phases; this volume has 4/);
+    });
+
+    it("accepts an unindexed axis at any size", () => {
+        // v1 is 8 slices here; a rule that never indexes slices says nothing
+        // about them, so nothing can disagree.
+        const saved = { ...ruleSet, requirements: { volumeCount: 3, volumes: { v1: { phases: { exact: 4 } } } } };
+        expect(checkRuleSetFit(saved, analysis)).toEqual([]);
     });
 
     it("errors when a referenced volume is gone entirely", () => {
-        const saved = {
-            ...emptyRuleSet(),
-            childSeries: [{ id: "cs-1", label: "A", selections: [{ volumeId: "v9", slices: "*", phases: "*" }] }]
-        };
+        const saved = { requirements: { volumeCount: 3, volumes: { v9: { phases: { exact: 1 } } } } };
         expect(checkRuleSetFit(saved, analysis)).toEqual([
             { level: "error", volumeId: "v9", message: "v9 does not exist in the current selection." }
         ]);
+    });
+
+    it("checks nothing for a rule set that has no requirements yet", () => {
+        expect(checkRuleSetFit(ruleSet, analysis)).toEqual([]);
     });
 
     it("fills in defaults for a hand-edited rule file", () => {
@@ -370,17 +418,18 @@ describe("rule set portability", () => {
         expect(computeDescription(attrs, "NOT DIAGNOSTIC: T1 VIBE")).toBe("NOT DIAGNOSTIC: T1 VIBE");
     });
 
-    it("loads a rule file written before provenance and phase keys were saved", () => {
+    it("keeps nothing that identifies where the rules came from", () => {
         const loaded = normalizeRuleSet({
             version: 1,
             sourceSeries: ["1.2.3"],
+            source: { series: [{ seriesDescription: "MULTI RECON" }] },
+            volumeFingerprints: { v1: "8x4@4" },
             childSeries: [{ id: "cs-1", selections: [{ volumeId: "v1" }] }]
         });
-        expect(loaded.source).toBeNull();
-        expect(loaded.phaseKeyOverrides).toEqual({});
-        // sourceSeries survives, but only as a record of where the rules came
-        // from: nothing in resolution consults it.
-        expect(loaded.sourceSeries).toEqual(["1.2.3"]);
+        expect(loaded.sourceSeries).toBeUndefined();
+        expect(loaded.source).toBeUndefined();
+        expect(loaded.volumeFingerprints).toBeUndefined();
+        expect(loaded.requirements).toBeNull();
     });
 
     it("carries saved phase-key overrides through a round trip", () => {

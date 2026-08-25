@@ -9,10 +9,10 @@
  * "FROM volume 1 SELECT slices * AND phases 1-3", plus the attribute edits to
  * apply to whatever those selections match.
  *
- * Selections bind to volumes positionally, by id, and to nothing else. The
- * `source` and `sourceSeries` fields record where a rule set came from and are
- * informational: they say what it was built on, never what it may be applied
- * to. That is what lets one saved file be re-run against other series.
+ * Selections bind to volumes positionally, by id, and to nothing else. A saved
+ * rule set therefore records nothing about where it came from - no series UID,
+ * number or description - only a `requirements` block describing the shape it
+ * needs, so it can be re-run against any data of that shape.
  */
 
 const fsp = require("fs/promises");
@@ -178,65 +178,168 @@ function makeChildSeries(index, overrides = {}) {
     };
 }
 
-function emptyRuleSet(sourceSeriesUIDs = []) {
-    return { version: RULESET_VERSION, sourceSeries: [...sourceSeriesUIDs], childSeries: [] };
+function emptyRuleSet() {
+    return { version: RULESET_VERSION, childSeries: [] };
 }
 
+/* ------------------------------------------------------------------ */
+/* Shape requirements                                                  */
+/* ------------------------------------------------------------------ */
+
 /**
- * A compact shape signature per volume, stored with a saved rule set.
+ * What one axis of one volume has to look like for a rule set to fit.
  *
- * Volume ids are positional ("v1"), so a rule file only means what it says as
- * long as re-analysis produces the same volumes. Recording the shapes lets a
- * later load tell the user their rules no longer line up instead of quietly
- * selecting the wrong images.
+ * Only the axes a rule actually indexes can matter. Selecting slices `*` says
+ * nothing about how many slices there should be, so a rule written that way
+ * applies to a 30-slice volume and a 300-slice one alike. An axis that is
+ * indexed by position is pinned to the extent it was written against, which
+ * keeps the invariant that a rule always fits the data it was built on - a
+ * "phases 1-2" rule off a 4-phase volume needs 4 phases, not 2.
+ *
+ * The relative and open-ended forms exist to adapt to size, so they set a
+ * floor rather than a fixed extent: `-1` is the last item whatever the size,
+ * and `3-` runs to the end.
+ *
+ * @param {string[]} specs every spec used for this axis on this volume
+ * @param {number} sourceExtent the axis size in the analysis being saved
+ * @returns {{exact: number} | {min: number} | null} null when unconstrained
  */
-function fingerprintVolumes(analysis) {
-    const out = {};
-    for (const v of analysis.volumes) {
-        out[v.id] = `${v.slices}x${v.phases}@${v.seriesNumber ?? "?"}`;
-    }
-    return out;
-}
+function axisRequirement(specs, sourceExtent) {
+    let pinned = false;
+    let floor = 0;
 
-/**
- * The provenance block written into a saved rule set: which series the rules
- * were built on, in enough detail for a human to recognise them later.
- */
-function describeSource(analysis) {
-    if (!analysis) return null;
-    return {
-        series: analysis.series.map((s) => ({
-            seriesInstanceUID: s.seriesInstanceUID,
-            seriesNumber: s.seriesNumber ?? null,
-            seriesDescription: s.seriesDescription ?? null,
-            modality: s.modality ?? null,
-            fileCount: s.fileCount ?? null
-        }))
-    };
-}
+    for (const spec of specs) {
+        const text = String(spec ?? "").trim();
+        if (text === "" || text === "*") continue;
 
-/** Compare a saved rule set's fingerprints against a fresh analysis. */
-function checkRuleSetFit(ruleSet, analysis) {
-    const current = fingerprintVolumes(analysis);
-    const saved = ruleSet?.volumeFingerprints;
-    const problems = [];
+        for (const rawTerm of text.split(",")) {
+            const term = rawTerm.trim();
+            if (!term) continue;
 
-    const referenced = new Set(
-        (ruleSet?.childSeries || []).flatMap((cs) => (cs.selections || []).map((s) => s.volumeId))
-    );
+            const single = term.match(SINGLE_RE);
+            if (single) {
+                const n = Number(single[1]);
+                if (n < 0) floor = Math.max(floor, -n); // counted from the end
+                else pinned = true;
+                continue;
+            }
 
-    for (const volumeId of referenced) {
-        if (!current[volumeId]) {
-            problems.push({ level: "error", volumeId, message: `${volumeId} does not exist in the current selection.` });
-        } else if (saved && saved[volumeId] && saved[volumeId] !== current[volumeId]) {
-            problems.push({
-                level: "warning",
-                volumeId,
-                message: `${volumeId} was ${saved[volumeId]} when these rules were saved but is ${current[volumeId]} now.`
-            });
+            const range = term.match(RANGE_RE);
+            // An unparseable term is a broken rule; resolution reports it far
+            // better than a requirement could, so claim nothing here.
+            if (!range) continue;
+
+            // A range that runs to the end adapts to the axis size, so even an
+            // absolute start only sets a floor. Only a range bounded at both
+            // ends pins the axis.
+            const openEnd = range[2] === undefined;
+            const bounds = openEnd ? [range[1] ?? "1"] : [range[1] ?? "1", range[2]];
+
+            for (const bound of bounds) {
+                const n = Number(bound);
+                if (n < 0) floor = Math.max(floor, -n);
+                else if (openEnd) floor = Math.max(floor, n);
+                else pinned = true;
+            }
         }
     }
+
+    if (pinned) return { exact: sourceExtent };
+    // A floor of one is satisfied by any volume that exists at all, so it is
+    // not worth recording.
+    return floor > 1 ? { min: floor } : null;
+}
+
+/**
+ * The shape a rule set needs, derived from the analysis it was built on and
+ * narrowed to the axes its selections actually index. This is the whole of
+ * what a saved rule file carries about its origin.
+ */
+function describeRequirements(ruleSet, analysis) {
+    if (!analysis) return null;
+
+    const volumesById = new Map(analysis.volumes.map((v) => [v.id, v]));
+    const selectionsByVolume = new Map();
+
+    for (const cs of ruleSet?.childSeries || []) {
+        for (const selection of cs.selections || []) {
+            if (!selectionsByVolume.has(selection.volumeId)) selectionsByVolume.set(selection.volumeId, []);
+            selectionsByVolume.get(selection.volumeId).push(selection);
+        }
+    }
+
+    const volumes = {};
+    for (const [volumeId, selections] of selectionsByVolume) {
+        const volume = volumesById.get(volumeId);
+        if (!volume) continue;
+
+        const needs = {};
+        const slices = axisRequirement(selections.map((sel) => sel.slices), volume.slices);
+        const phases = axisRequirement(selections.map((sel) => sel.phases), volume.phases);
+        if (slices) needs.slices = slices;
+        if (phases) needs.phases = phases;
+        if (Object.keys(needs).length) volumes[volumeId] = needs;
+    }
+
+    return { volumeCount: analysis.volumes.length, volumes };
+}
+
+/**
+ * Does a rule set fit an analysis? Every problem is an error: either the shape
+ * matches or the rules are not for this data.
+ *
+ * A rule set with no requirements - one still being built against a live
+ * analysis, or hand-written - is not checked.
+ */
+function checkRuleSetFit(ruleSet, analysis) {
+    const requirements = ruleSet?.requirements;
+    if (!requirements) return [];
+
+    const problems = [];
+    const volumeCount = analysis.volumes.length;
+
+    if (Number.isFinite(requirements.volumeCount) && requirements.volumeCount !== volumeCount) {
+        problems.push({
+            level: "error",
+            message: `these rules were built on ${pluralizeVolumes(requirements.volumeCount)}; this selection has ${volumeCount}.`
+        });
+    }
+
+    const volumesById = new Map(analysis.volumes.map((v) => [v.id, v]));
+
+    for (const [volumeId, needs] of Object.entries(requirements.volumes || {})) {
+        const volume = volumesById.get(volumeId);
+        if (!volume) {
+            problems.push({ level: "error", volumeId, message: `${volumeId} does not exist in the current selection.` });
+            continue;
+        }
+
+        for (const axis of ["slices", "phases"]) {
+            const need = needs[axis];
+            if (!need) continue;
+            const actual = volume[axis];
+
+            if (Number.isFinite(need.exact) && actual !== need.exact) {
+                problems.push({
+                    level: "error",
+                    volumeId,
+                    message: `${volumeId} needs exactly ${need.exact} ${axis}; this volume has ${actual}.`
+                });
+            } else if (Number.isFinite(need.min) && actual < need.min) {
+                problems.push({
+                    level: "error",
+                    volumeId,
+                    message: `${volumeId} needs at least ${need.min} ${axis}; this volume has ${actual}.`
+                });
+            }
+        }
+    }
+
     return problems;
+}
+
+function pluralizeVolumes(n) {
+    return `${n} volume${n === 1 ? "" : "s"}`;
 }
 
 /** Fill in anything a hand-edited or older rule file left out. */
@@ -249,10 +352,10 @@ function normalizeRuleSet(ruleSet) {
     }));
     return {
         version: RULESET_VERSION,
-        // Provenance only - see the header comment.
-        sourceSeries: ruleSet?.sourceSeries || [],
-        source: ruleSet?.source || null,
-        volumeFingerprints: ruleSet?.volumeFingerprints || null,
+        // The shape these rules need, and the whole of what a rule file says
+        // about where it came from. A set still being built in the app has
+        // none until it is saved against an analysis.
+        requirements: ruleSet?.requirements || null,
         // volumeId -> DICOM keyword, the shape analyzeSelection takes. Kept in
         // the file because the phase ordering decides what "phases 1-3" means;
         // re-detecting it elsewhere could quietly select different images.
@@ -500,8 +603,8 @@ module.exports = {
     makeChildSeries,
     emptyRuleSet,
     normalizeRuleSet,
-    fingerprintVolumes,
-    describeSource,
+    axisRequirement,
+    describeRequirements,
     checkRuleSetFit,
     computeSeriesNumber,
     computeDescription,

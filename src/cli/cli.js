@@ -22,7 +22,7 @@ const fsp = require("fs/promises");
 const path = require("path");
 
 const { scanDirectory } = require("../main/scanner");
-const { buildLibrary } = require("../main/library");
+const { buildLibrary, groupBySeries } = require("../main/library");
 const { analyzeSelection } = require("../main/analyze");
 const rules = require("../main/rules");
 const { exportPlan } = require("../main/export");
@@ -52,12 +52,14 @@ Options:
   --phase-key <tag>   Force the phase-ordering attribute for every volume,
                       e.g. TriggerTime. Overrides the rule file.
   --dry-run           Report what apply would write, and write nothing.
-  --strict            Treat a volume-shape mismatch as a reason to skip a
-                      series rather than a warning.
   --json              Emit the result as JSON on stdout.
   --quiet             Suppress progress and per-series chatter.
   --version           Print the version.
   --help              Print this message.
+
+A rule set records the shape it needs - how many volumes, and the extent of
+only those axes its selections index - so it is offered to every series and
+applied to the ones that match.
 
 Exit status is 0 when nothing failed - including a run where every series was
 skipped because the rules did not fit - and 1 when a file could not be read or
@@ -69,7 +71,7 @@ written.`;
 
 const COMMANDS = new Set(["apply", "list", "analyze"]);
 const TAKES_VALUE = new Set(["folder", "rules", "out", "series", "phase-key"]);
-const BOOLEANS = new Set(["in-place", "dry-run", "strict", "json", "quiet", "help", "version"]);
+const BOOLEANS = new Set(["in-place", "dry-run", "json", "quiet", "help", "version"]);
 
 /**
  * Parse argv into a command plus flags. Returns `errors` rather than throwing
@@ -134,7 +136,7 @@ function checkFlags(command, flags) {
         if (!flags.out && !flags.inPlace) errors.push("apply needs either --out <dir> or --in-place");
         if (flags.out && flags.inPlace) errors.push("--out and --in-place are mutually exclusive");
     } else {
-        for (const only of ["rules", "out", "inPlace", "dryRun", "strict"]) {
+        for (const only of ["rules", "out", "inPlace", "dryRun"]) {
             if (flags[only]) errors.push(`--${only.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)} only applies to apply`);
         }
     }
@@ -144,25 +146,6 @@ function checkFlags(command, flags) {
 /* ------------------------------------------------------------------ */
 /* Series selection                                                    */
 /* ------------------------------------------------------------------ */
-
-/**
- * Split a scan into one group per series, ordered the way the library view
- * orders them so CLI output and GUI output agree.
- */
-function groupBySeries(records) {
-    const groups = new Map();
-    for (const record of records) {
-        const uid = record.seriesInstanceUID;
-        if (!groups.has(uid)) groups.set(uid, { seriesInstanceUID: uid, records: [] });
-        groups.get(uid).records.push(record);
-    }
-
-    return [...groups.values()].sort((a, b) => {
-        const an = a.records[0].seriesNumber ?? Infinity;
-        const bn = b.records[0].seriesNumber ?? Infinity;
-        return an - bn || a.seriesInstanceUID.localeCompare(b.seriesInstanceUID);
-    });
-}
 
 /**
  * Does a series match any of the --series filters? A filter is a
@@ -338,8 +321,6 @@ async function cmdApply(flags, report) {
     const ruleSet = await loadRuleFile(flags.rules);
     const { records } = await scanFolder(flags.folder, report);
 
-    describeProvenance(ruleSet, report);
-
     const target = flags.inPlace
         ? { mode: "in-place" }
         : { mode: "new-folder", outputDir: path.resolve(flags.out) };
@@ -395,24 +376,11 @@ async function applyToSeries(group, { ruleSet, target, flags, report }) {
         forcedPhaseKey: flags.phaseKey
     });
 
-    // A rule set is offered to every series, so most of these are expected
-    // misses rather than mistakes: a missing volume simply means these rules
-    // were written for a differently shaped series.
+    // A rule set is offered to every series, so a shape that does not match is
+    // an expected miss rather than a mistake: these rules were written for a
+    // differently shaped series.
     const problems = rules.checkRuleSetFit(ruleSet, analysis);
-    const missing = problems.filter((p) => p.level === "error");
-    const mismatched = problems.filter((p) => p.level !== "error");
-
-    if (missing.length) return { status: "skipped", reason: missing.map((p) => p.message).join(" ") };
-    if (mismatched.length) {
-        if (flags.strict) {
-            return { status: "skipped", reason: `${mismatched.map((p) => p.message).join(" ")} (--strict)` };
-        }
-        // A shape difference is news only when this is the very series the
-        // rules were built on. Anywhere else it is the normal state of affairs
-        // and saying so once per series would bury the real output.
-        const isSource = (ruleSet.sourceSeries || []).includes(group.seriesInstanceUID);
-        if (isSource) for (const p of mismatched) report.say(`  warn  ${seriesLabel(group)} - ${p.message}`);
-    }
+    if (problems.length) return { status: "skipped", reason: problems.map((p) => p.message).join(" ") };
 
     const plan = rules.resolveRuleSet(ruleSet, analysis);
     const blocking = plan.conflicts.filter((c) => c.level === "error");
@@ -461,21 +429,6 @@ async function loadRuleFile(file) {
     } catch (err) {
         throw new Error(`${file} is not a valid rule file: ${err.message}`);
     }
-}
-
-/**
- * Say what the rules were built on. This is provenance and nothing more - the
- * source series never constrains what the rules may be applied to - so it is
- * printed rather than checked.
- */
-function describeProvenance(ruleSet, report) {
-    const series = ruleSet.source?.series;
-    if (!series?.length) return;
-    report.say(
-        `Rules built on: ${series
-            .map((s) => `${s.seriesNumber ?? "-"} ${s.seriesDescription || "(no description)"}`)
-            .join(", ")}`
-    );
 }
 
 function renderSummary(summary) {
@@ -536,4 +489,4 @@ if (require.main === module) {
         });
 }
 
-module.exports = { main, parseArgs, checkFlags, matchesSeries, groupBySeries, renderSummary };
+module.exports = { main, parseArgs, checkFlags, matchesSeries, renderSummary };

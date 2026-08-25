@@ -22,7 +22,7 @@ const state = {
     selectedSeries: new Set(),
     analysis: null,
     phaseKeyOverrides: {},
-    ruleSet: { version: 1, sourceSeries: [], childSeries: [] },
+    ruleSet: { version: 1, childSeries: [] },
     preview: null,
     focusedChildId: null,
     messages: [],
@@ -176,20 +176,18 @@ function applyDiscoveredRules(found) {
     state.pendingRuleSet = found.ruleSet;
     state.pendingRuleFile = found.filePath;
 
-    const available = new Set(
-        state.library.studies.flatMap((study) => study.series.map((s) => s.seriesInstanceUID))
-    );
-    const wanted = found.ruleSet.sourceSeries || [];
-    const present = wanted.filter((uid) => available.has(uid));
-    for (const uid of present) state.selectedSeries.add(uid);
+    // The rules say nothing about where they came from, so what to tick is
+    // decided by shape: the main process reports which series they fit.
+    const fitting = found.fittingSeries || [];
+    for (const uid of fitting) state.selectedSeries.add(uid);
     renderLibraryStage();
 
     setLibraryMessages([
         {
             level: "info",
-            message: present.length
-                ? `Found ${basename(found.filePath)} - ${present.length} of ${pluralize(wanted.length, "series", "series")} pre-selected. The rules apply when you press Analyze Selected.`
-                : `Found ${basename(found.filePath)}, but none of the series it was saved from are in this folder. The rules still apply to whatever you analyze.`
+            message: fitting.length
+                ? `Found ${basename(found.filePath)} - ${pluralize(fitting.length, "series", "series")} here ${fitting.length === 1 ? "matches" : "match"} these rules, pre-selected. They apply when you press Analyze Selected.`
+                : `Found ${basename(found.filePath)}, but no series here has the shape it needs. The rules still apply to whatever you analyze.`
         }
     ]);
 }
@@ -209,15 +207,13 @@ async function analyzeSelected() {
     }
 
     const analysis = await window.dcmsort.analyzeSelection(uids, state.phaseKeyOverrides);
-    // Rules found alongside the folder are consumed here: the spread keeps the
-    // saved volumeFingerprints, which checkRules needs to spot a mismatch.
+    // Rules found alongside the folder are consumed here, requirements and
+    // all, so checkRules can confirm they fit what was actually selected.
     const pending = state.pendingRuleSet;
     state.pendingRuleSet = null;
 
     state.analysis = analysis;
-    state.ruleSet = pending
-        ? { ...pending, sourceSeries: uids }
-        : { version: 1, sourceSeries: uids, childSeries: [] };
+    state.ruleSet = pending ?? { version: 1, childSeries: [] };
     state.focusedChildId = state.ruleSet.childSeries[0]?.id ?? null;
     state.nextChildIndex = state.ruleSet.childSeries.length;
     state.preview = null;

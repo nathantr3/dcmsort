@@ -84,4 +84,27 @@ function buildLibrary(records) {
     };
 }
 
-module.exports = { buildLibrary, formatDate };
+/**
+ * Split flat scan records into one group per series, ordered the way
+ * buildLibrary orders them so every view agrees.
+ *
+ * Analysing a series on its own is the unit of work for applying a rule set,
+ * in the CLI and when working out which series a rule file fits, so the
+ * grouping lives here rather than in either caller.
+ *
+ * @param {object[]} records scan records
+ * @returns {{seriesInstanceUID: string, records: object[]}[]}
+ */
+function groupBySeries(records) {
+    const groups = new Map();
+
+    for (const record of records) {
+        const uid = record.seriesInstanceUID;
+        if (!groups.has(uid)) groups.set(uid, { seriesInstanceUID: uid, records: [] });
+        groups.get(uid).records.push(record);
+    }
+
+    return [...groups.values()].sort((a, b) => bySeriesNumber(a.records[0], b.records[0]));
+}
+
+module.exports = { buildLibrary, groupBySeries, formatDate };

@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import cli from "../src/cli/cli.js";
 import io from "../src/main/dicom-io.js";
 
-const { parseArgs, checkFlags, matchesSeries, groupBySeries } = cli;
+const { parseArgs, checkFlags, matchesSeries } = cli;
 const { readRecord } = io;
 
 const run = promisify(execFile);
@@ -23,8 +23,9 @@ const MULTI_RECON_UID = "1.2.826.0.1.3680043.9.7133.20.4";
 function ruleFile(dir, overrides = {}) {
     const document = {
         version: 1,
-        sourceSeries: [MULTI_RECON_UID],
-        volumeFingerprints: { v1: "8x4@4" },
+        // v1 of MULTI RECON is 8 x 4; slices are "*" so only the phase extent
+        // and the volume count are required.
+        requirements: { volumeCount: 3, volumes: { v1: { phases: { exact: 4 } } } },
         childSeries: [
             {
                 id: "cs-1",
@@ -126,19 +127,6 @@ describe("matchesSeries", () => {
     });
 });
 
-describe("groupBySeries", () => {
-    it("splits records by series and orders them by series number", () => {
-        const records = [
-            { seriesInstanceUID: "b", seriesNumber: 9 },
-            { seriesInstanceUID: "a", seriesNumber: 2 },
-            { seriesInstanceUID: "b", seriesNumber: 9 }
-        ];
-        const groups = groupBySeries(records);
-        expect(groups.map((g) => g.seriesInstanceUID)).toEqual(["a", "b"]);
-        expect(groups[1].records).toHaveLength(2);
-    });
-});
-
 describe("apply end to end", () => {
     it("writes the series the rules asked for, with the attributes they asked for", async () => {
         const out = path.join(tmp, "out");
@@ -165,7 +153,7 @@ describe("apply end to end", () => {
         expect(record.seriesInstanceUID).not.toBe(MULTI_RECON_UID);
     });
 
-    it("offers the rules to every series independently and skips the ones they do not fit", async () => {
+    it("offers the rules to every series and applies only to matching shapes", async () => {
         const rules = ruleFile(tmp);
         const { code, stdout } = await cliRun([
             "apply", "--rules", rules, "--folder", FIXTURES,
@@ -175,17 +163,41 @@ describe("apply end to end", () => {
 
         const summary = JSON.parse(stdout);
         expect(summary.seriesConsidered).toBe(6);
-        // T2 AX is a single-phase volume, so "phases 1-2" cannot resolve there.
+
+        // Only MULTI RECON analyzes into 3 volumes with a 4-phase v1.
+        const applied = summary.results.filter((r) => r.status === "planned");
+        expect(applied.map((r) => r.seriesInstanceUID)).toEqual([MULTI_RECON_UID]);
+
+        // T2 AX is one single-phase volume: wrong on both counts.
         const t2 = summary.results.find((r) => r.series.startsWith("1 "));
         expect(t2.status).toBe("skipped");
-        expect(summary.seriesApplied).toBeGreaterThan(1);
+        expect(t2.reason).toMatch(/built on 3 volumes; this selection has 1/);
+
         expect(fs.existsSync(path.join(tmp, "unused"))).toBe(false);
+    });
+
+    it("skips a series whose indexed axis is the wrong size", async () => {
+        // CINE SA is a single 8 x 4 volume: the volume count is wrong, and a
+        // rule needing 9 phases would not fit its v1 either.
+        const rules = ruleFile(tmp, {
+            requirements: { volumeCount: 1, volumes: { v1: { phases: { exact: 9 } } } }
+        });
+        const { code, stdout } = await cliRun([
+            "apply", "--rules", rules, "--folder", FIXTURES, "--series", "3",
+            "--out", path.join(tmp, "wrong-shape"), "--dry-run", "--json"
+        ]);
+        expect(code).toBe(0);
+
+        const [only] = JSON.parse(stdout).results;
+        expect(only.status).toBe("skipped");
+        expect(only.reason).toMatch(/v1 needs exactly 9 phases; this volume has 4/);
     });
 
     it("exits 0 when the rules fit nothing at all", async () => {
         // v9 exists in no series, so every one is skipped - an empty result,
         // not a failure.
         const rules = ruleFile(tmp, {
+            requirements: { volumeCount: 99, volumes: {} },
             childSeries: [
                 { id: "cs-1", label: "Nowhere", selections: [{ volumeId: "v9", slices: "*", phases: "*" }] }
             ]
@@ -196,20 +208,6 @@ describe("apply end to end", () => {
         ]);
         expect(code).toBe(0);
         expect(stdout).toContain("did not fit any series");
-    });
-
-    it("narrows to shape-identical series under --strict", async () => {
-        const rules = ruleFile(tmp);
-        const { code, stdout } = await cliRun([
-            "apply", "--rules", rules, "--folder", FIXTURES,
-            "--out", path.join(tmp, "strict"), "--dry-run", "--strict", "--json"
-        ]);
-        expect(code).toBe(0);
-
-        const summary = JSON.parse(stdout);
-        const applied = summary.results.filter((r) => r.status === "planned");
-        expect(applied).toHaveLength(1);
-        expect(applied[0].seriesInstanceUID).toBe(MULTI_RECON_UID);
     });
 
     it("fails on a missing rule file and on a folder that is not one", async () => {
