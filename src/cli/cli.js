@@ -32,7 +32,7 @@ const VERSION = require("../../package.json").version;
 const USAGE = `dcmsort ${VERSION} - interactive DICOM sorting, splitting, and attribute modification
 
 Usage:
-  dcmsort apply   --rules <file> --folder <dir> (--out <dir> | --in-place) [options]
+  dcmsort apply   [--rules <file>] --folder <dir> (--out <dir> | --in-place) [options]
   dcmsort list    --folder <dir> [options]
   dcmsort analyze --folder <dir> [options]
 
@@ -43,7 +43,9 @@ Commands:
 
 Options:
   --folder <dir>      Folder of DICOMs to read, searched recursively.
-  --rules <file>      Rule set JSON saved from the app (apply only).
+  --rules <file>      Rule set JSON saved from the app (apply only). Left out,
+                      apply uses a valid rule file found in --folder: one named
+                      rules.dcmsort.json, or a lone *.dcmsort.json.
   --out <dir>         Write a new tree under <dir> (apply only).
   --in-place          Overwrite the source files (apply only). Destructive.
   --series <match>    Only touch series matching this SeriesNumber, a substring
@@ -130,7 +132,7 @@ function checkFlags(command, flags) {
     if (!flags.folder) errors.push("--folder is required");
 
     if (command === "apply") {
-        if (!flags.rules) errors.push("--rules is required for apply");
+        // --rules is optional: without it, apply looks in --folder.
         // Overwriting the source images is never something to fall into by
         // default, so an output destination has to be stated outright.
         if (!flags.out && !flags.inPlace) errors.push("apply needs either --out <dir> or --in-place");
@@ -206,9 +208,13 @@ function makeReporter(flags) {
 /* Shared setup                                                        */
 /* ------------------------------------------------------------------ */
 
-async function scanFolder(folder, report) {
+async function assertFolder(folder) {
     const stat = await fsp.stat(folder).catch(() => null);
     if (!stat || !stat.isDirectory()) throw new Error(`Not a folder: ${folder}`);
+}
+
+async function scanFolder(folder, report) {
+    await assertFolder(folder);
 
     const { records, errors, stats } = await scanDirectory(folder, {
         onProgress: (p) =>
@@ -318,7 +324,8 @@ async function cmdAnalyze(flags, report) {
 }
 
 async function cmdApply(flags, report) {
-    const ruleSet = await loadRuleFile(flags.rules);
+    await assertFolder(flags.folder);
+    const { filePath: rulesPath, ruleSet } = await resolveRuleFile(flags, report);
     const { records } = await scanFolder(flags.folder, report);
 
     const target = flags.inPlace
@@ -352,7 +359,7 @@ async function cmdApply(flags, report) {
     const applied = results.filter((r) => r.status === "exported" || r.status === "planned");
     const summary = {
         folder: flags.folder,
-        rules: path.resolve(flags.rules),
+        rules: path.resolve(rulesPath),
         target,
         dryRun: Boolean(flags.dryRun),
         seriesConsidered: results.length,
@@ -415,6 +422,42 @@ async function applyToSeries(group, { ruleSet, target, flags, report }) {
         writtenCount: result.stats.writtenCount,
         errorCount: result.stats.errorCount
     };
+}
+
+/**
+ * The rules to apply: the file named with --rules, or one found in the folder
+ * being processed - the same discovery the app does when a folder is opened.
+ *
+ * A file is only picked up automatically if it is genuinely usable: it has to
+ * parse and to carry rules. Guessing at a file that turns out to be empty or
+ * malformed would be worse than saying nothing was found.
+ */
+async function resolveRuleFile(flags, report) {
+    if (flags.rules) return { filePath: flags.rules, ruleSet: await loadRuleFile(flags.rules) };
+
+    const found = await rules.findRuleFile(flags.folder);
+    if (!found) {
+        throw new Error(`No rule file in ${flags.folder}. Name one with --rules <file>.`);
+    }
+    if (found.ambiguous) {
+        throw new Error(
+            `${flags.folder} has several rule files (${found.ambiguous.join(", ")}) and none named ` +
+                `${rules.RULE_FILE_NAME}. Name the one you want with --rules <file>.`
+        );
+    }
+
+    // loadRuleFile reports a parse failure in terms of the file it read, which
+    // reads correctly whether the user named it or we found it.
+    const ruleSet = await loadRuleFile(found.filePath);
+    if (!ruleSet.childSeries.length) {
+        throw new Error(
+            `${found.filePath} has no child series, so there is nothing to apply. ` +
+                `Name a different file with --rules <file>.`
+        );
+    }
+
+    report.say(`Using ${path.basename(found.filePath)} found in ${flags.folder}`);
+    return { filePath: found.filePath, ruleSet };
 }
 
 async function loadRuleFile(file) {

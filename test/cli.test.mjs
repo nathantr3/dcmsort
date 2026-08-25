@@ -88,6 +88,10 @@ describe("checkFlags", () => {
         expect(errors).toEqual(["apply needs either --out <dir> or --in-place"]);
     });
 
+    it("does not demand --rules, which apply can find in the folder", () => {
+        expect(checkFlags("apply", { folder: "/d", out: "/o" })).toEqual([]);
+    });
+
     it("refuses --out together with --in-place", () => {
         const errors = checkFlags("apply", { folder: "/d", rules: "r.json", out: "/o", inPlace: true });
         expect(errors).toContain("--out and --in-place are mutually exclusive");
@@ -208,6 +212,59 @@ describe("apply end to end", () => {
         ]);
         expect(code).toBe(0);
         expect(stdout).toContain("did not fit any series");
+    });
+
+    it("finds the rule file in the folder when --rules is left out", async () => {
+        const folder = fs.mkdtempSync(path.join(os.tmpdir(), "dcmsort-found-"));
+        fs.cpSync(FIXTURES, folder, { recursive: true, filter: (src) => !src.endsWith(".DS_Store") });
+        ruleFile(folder); // writes rules.dcmsort.json into the folder being applied to
+
+        const { code, stdout } = await cliRun([
+            "apply", "--folder", folder, "--out", path.join(folder, "out"), "--dry-run", "--json"
+        ]);
+        expect(code).toBe(0);
+
+        // --json is quiet, so the file it picked shows up in the summary
+        // rather than as commentary.
+        const summary = JSON.parse(stdout);
+        expect(summary.rules).toBe(path.join(folder, "rules.dcmsort.json"));
+        expect(summary.results.filter((r) => r.status === "planned")).toHaveLength(1);
+    });
+
+    it("takes a lone rule file whatever it is called, but not one of several", async () => {
+        const folder = fs.mkdtempSync(path.join(os.tmpdir(), "dcmsort-found-"));
+        fs.cpSync(FIXTURES, folder, { recursive: true, filter: (src) => !src.endsWith(".DS_Store") });
+        fs.renameSync(ruleFile(folder), path.join(folder, "cardiac.dcmsort.json"));
+
+        const args = ["apply", "--folder", folder, "--out", path.join(folder, "out"), "--dry-run"];
+        const lone = await cliRun(args);
+        expect(lone.code).toBe(0);
+        expect(lone.stderr).toContain("Using cardiac.dcmsort.json");
+
+        fs.copyFileSync(path.join(folder, "cardiac.dcmsort.json"), path.join(folder, "other.dcmsort.json"));
+        const several = await cliRun(args);
+        expect(several.code).toBe(1);
+        expect(several.stderr).toMatch(/several rule files .* Name the one you want/);
+    });
+
+    it("refuses to pick up a rule file that is not usable", async () => {
+        const folder = fs.mkdtempSync(path.join(os.tmpdir(), "dcmsort-found-"));
+        fs.cpSync(FIXTURES, folder, { recursive: true, filter: (src) => !src.endsWith(".DS_Store") });
+        const args = ["apply", "--folder", folder, "--out", path.join(folder, "out"), "--dry-run"];
+
+        const none = await cliRun(args);
+        expect(none.code).toBe(1);
+        expect(none.stderr).toMatch(/No rule file in .* Name one with --rules/);
+
+        fs.writeFileSync(path.join(folder, "rules.dcmsort.json"), '{ "version": 1, ');
+        const broken = await cliRun(args);
+        expect(broken.code).toBe(1);
+        expect(broken.stderr).toContain("is not a valid rule file");
+
+        fs.writeFileSync(path.join(folder, "rules.dcmsort.json"), '{ "version": 1, "childSeries": [] }');
+        const empty = await cliRun(args);
+        expect(empty.code).toBe(1);
+        expect(empty.stderr).toContain("has no child series");
     });
 
     it("fails on a missing rule file and on a folder that is not one", async () => {

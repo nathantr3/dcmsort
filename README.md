@@ -178,9 +178,17 @@ The same engine runs headless, for scripting a saved rule set over a folder:
 ```bash
 dcmsort apply --rules cardiac.dcmsort.json --folder /data/patient42 --out /data/out
 dcmsort apply --rules cardiac.dcmsort.json --folder /data/patient42 --in-place
+dcmsort apply --folder /data/patient42 --out /data/out   # rules found in the folder
 dcmsort list    --folder /data/patient42      # exams, series, UIDs
 dcmsort analyze --folder /data/patient42      # detected volumes, slices x phases
 ```
+
+`--rules` is optional. Left out, `apply` uses a rule file sitting in the folder
+it is processing - one named `rules.dcmsort.json`, or a lone `*.dcmsort.json` -
+which is the same discovery the app does when you open a folder. It only picks
+one up if it is genuinely usable: a file that will not parse, or that carries no
+rules, is reported rather than guessed around, as are several candidates with no
+clear default.
 
 `apply` takes **each series in the folder on its own**: it analyzes that series
 alone - so its volumes always start at `v1` - and offers the rule set to it. A
