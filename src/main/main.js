@@ -1,6 +1,7 @@
 "use strict";
 
 const path = require("path");
+const { pathToFileURL } = require("url");
 const { app, BrowserWindow, Menu, shell } = require("electron");
 
 const ipc = require("./ipc");
@@ -32,7 +33,19 @@ function createWindow() {
         }
     });
 
-    mainWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+    const pageFile = path.join(__dirname, "..", "renderer", "index.html");
+    mainWindow.loadFile(pageFile);
+
+    // The app is a single page and never navigates. Without this, dropping any
+    // file on the window replaces the whole app with that file's contents -
+    // Electron treats the drop as a navigation - and the only way back is to
+    // restart. Anything that is not the app page is refused.
+    const pageUrl = pathToFileURL(pageFile).toString();
+    const blockNavigation = (event, url) => {
+        if (url !== pageUrl) event.preventDefault();
+    };
+    mainWindow.webContents.on("will-navigate", blockNavigation);
+    mainWindow.webContents.on("will-redirect", blockNavigation);
 
     // A folder can be named up front, which saves reaching for the picker and
     // makes the app scriptable: `npm start -- --open <dir>` or DCMSORT_OPEN_DIR.

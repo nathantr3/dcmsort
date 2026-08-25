@@ -524,6 +524,12 @@ function init() {
 
     initExportDialog();
 
+    // Nothing on the page is a drop target, and the browser's default for a
+    // dropped file is to navigate to it, so refuse drops outright.
+    for (const type of ["dragover", "drop"]) {
+        window.addEventListener(type, (event) => event.preventDefault());
+    }
+
     window.dcmsort.onOpenPath((root) => scan(root));
 
     window.dcmsort.onMenuCommand((command) => {
