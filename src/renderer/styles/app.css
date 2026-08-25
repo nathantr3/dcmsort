@@ -86,6 +86,9 @@ body {
     /* Leaves room for the macOS traffic lights under hiddenInset. */
     padding-top: 44px;
     border-bottom: 1px solid var(--border);
+    /* hiddenInset hides the real title bar, so this stands in as one: without
+     * a drag region the window cannot be moved at all. */
+    -webkit-app-region: drag;
 }
 
 .stage-title h1 {
@@ -269,6 +272,28 @@ label.radio em {
     padding-top: 34px;
     border-bottom: 1px solid var(--border);
     background: var(--bg-raised);
+    -webkit-app-region: drag;
+}
+
+/* Anything you can click has to opt back out, or the drag region swallows it. */
+.stage-header button,
+.stage-header input,
+.stage-header select,
+.stage-header label,
+.workspace-toolbar button,
+.workspace-toolbar input,
+.workspace-toolbar select,
+.workspace-toolbar label {
+    -webkit-app-region: no-drag;
+}
+
+/*
+ * The page is not a drag source. Dragging its content and dropping it back on
+ * the window navigates away from the app - which is what made the window
+ * appear to fill with source code when someone tried to move it by the page.
+ */
+* {
+    -webkit-user-drag: none;
 }
 
 .workspace-title {

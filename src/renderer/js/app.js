@@ -625,10 +625,14 @@ function init() {
     initExportDialog();
     initRulePicker();
 
-    // Nothing on the page is a drop target, and the browser's default for a
-    // dropped file is to navigate to it, so refuse drops outright.
-    for (const type of ["dragover", "drop"]) {
-        window.addEventListener(type, (event) => event.preventDefault());
+    // Nothing here is a drag source or a drop target, and the browser's default
+    // on a drop is to navigate to whatever was dropped - which replaces the app
+    // with that file's contents and cannot be undone without restarting.
+    // Refusing dragstart stops a drag that begins on the page ever happening;
+    // dragover and drop cover anything dragged in from outside. Capture phase,
+    // so nothing downstream can swallow the event first.
+    for (const type of ["dragstart", "dragover", "drop"]) {
+        window.addEventListener(type, (event) => event.preventDefault(), true);
     }
 
     window.dcmsort.onOpenPath((root) => scan(root));
