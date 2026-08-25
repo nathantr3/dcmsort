@@ -39,6 +39,8 @@ make run-blank                 # launches with the folder picker
 make dist-mac            # macOS arm64 dmg  -> dist/dcmsort-<version>-arm64.dmg
 make dist-mac-x64        # macOS Intel dmg
 make dist-mac-universal  # both macOS architectures
+make dist-linux          # Linux x86_64 AppImage
+make dist-linux-arm64    # Linux arm64 AppImage
 make dist-win            # Windows nsis installer
 make pack                # unpacked app, no installer
 ```
@@ -209,12 +211,20 @@ no second runtime and cannot drift from the app it ships with.
 sudo ln -s /Applications/dcmsort.app/Contents/Resources/dcmsort /usr/local/bin/dcmsort   # or: make cli-link
 ```
 
+```bash
+# Linux, from an extracted AppImage or an unpacked build
+/opt/dcmsort/resources/dcmsort apply --rules r.json --folder /data --out /out
+sudo ln -s /opt/dcmsort/resources/dcmsort /usr/local/bin/dcmsort
+```
+
 ```bat
 rem Windows
 "C:\Program Files\dcmsort\resources\dcmsort.cmd" apply --rules r.json --folder D:\data --out D:\out
 ```
 
-Add that `resources` folder to `PATH` for a bare `dcmsort` on Windows.
+Add that `resources` folder to `PATH` for a bare `dcmsort` on Windows. The same
+POSIX launcher serves macOS and Linux; it finds the executable in whichever
+place the platform puts it.
 
 ## Architecture
 

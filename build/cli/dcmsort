@@ -1,16 +1,17 @@
 #!/bin/sh
-# dcmsort command line entry point, shipped inside the .app bundle.
+# dcmsort command line entry point, shipped inside the app.
 #
-# The bundle already carries a complete Node runtime: its own Electron binary,
+# The app already carries a complete Node runtime: its own Electron binary,
 # which runs any script as plain Node when ELECTRON_RUN_AS_NODE is set. So the
 # CLI needs no second runtime and can never drift from the app it ships with.
 #
 # Symlink this into your PATH, e.g.
 #   ln -s "/Applications/dcmsort.app/Contents/Resources/dcmsort" /usr/local/bin/dcmsort
+#   ln -s "/opt/dcmsort/resources/dcmsort" /usr/local/bin/dcmsort
 
 set -e
 
-# Resolve through symlinks so a link in /usr/local/bin still finds the bundle.
+# Resolve through symlinks so a link in /usr/local/bin still finds the app.
 SELF=$0
 while [ -L "$SELF" ]; do
     LINK=$(readlink "$SELF")
@@ -21,5 +22,20 @@ while [ -L "$SELF" ]; do
 done
 HERE=$(cd "$(dirname "$SELF")" && pwd)
 
-ELECTRON_RUN_AS_NODE=1 export ELECTRON_RUN_AS_NODE
-exec "$HERE/../MacOS/dcmsort" "$HERE/app.asar/src/cli/cli.js" "$@"
+# This script sits in the resources directory on both platforms; only the way
+# back to the executable differs. macOS buries it in Contents/MacOS, Linux puts
+# it beside the resources folder.
+for CANDIDATE in "$HERE/../MacOS/dcmsort" "$HERE/../dcmsort"; do
+    if [ -x "$CANDIDATE" ]; then
+        ELECTRON=$CANDIDATE
+        break
+    fi
+done
+
+if [ -z "$ELECTRON" ]; then
+    echo "dcmsort: cannot find the app executable next to $HERE" >&2
+    exit 1
+fi
+
+export ELECTRON_RUN_AS_NODE=1
+exec "$ELECTRON" "$HERE/app.asar/src/cli/cli.js" "$@"

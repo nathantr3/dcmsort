@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Interactive DICOM sorting, splitting, and attribute modification",
   "main": "src/main/main.js",
+  "desktopName": "dcmsort.desktop",
   "bin": {
     "dcmsort": "src/cli/cli.js"
   },
@@ -43,6 +44,20 @@
       ],
       "category": "public.app-category.medical",
       "icon": "build/icon.icns",
+      "extraResources": [
+        {
+          "from": "build/cli/dcmsort",
+          "to": "dcmsort"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Science",
+      "syncDesktopName": true,
+      "icon": "build/icon.png",
       "extraResources": [
         {
           "from": "build/cli/dcmsort",

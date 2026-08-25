@@ -29,7 +29,8 @@ ARGS ?= --help
 
 .DEFAULT_GOAL := help
 .PHONY: help install fixtures test watch run run-blank drive smoke focus-check icon \
-        cli cli-link dist-mac dist-mac-x64 dist-mac-universal dist-win pack clean distclean
+        cli cli-link dist-mac dist-mac-x64 dist-mac-universal dist-linux dist-linux-arm64 \
+        dist-win pack clean distclean
 
 ## help: list the available targets
 help:
@@ -106,6 +107,14 @@ dist-mac-x64: $(NODE_MODULES) $(ICON)
 ## dist-mac-universal: build both macOS architectures
 dist-mac-universal: $(NODE_MODULES) $(ICON)
 	npx electron-builder --mac --arm64 --x64
+
+## dist-linux: build the Linux x86_64 AppImage
+dist-linux: $(NODE_MODULES) $(ICON_PNG)
+	npx electron-builder --linux --x64
+
+## dist-linux-arm64: build the Linux arm64 AppImage
+dist-linux-arm64: $(NODE_MODULES) $(ICON_PNG)
+	npx electron-builder --linux --arm64
 
 ## dist-win: build the Windows installer
 dist-win: $(NODE_MODULES) $(ICON)
